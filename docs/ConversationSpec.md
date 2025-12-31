@@ -1,4 +1,6 @@
-# Conversation Spec（会話仕様：状態機械）
+# Conversation Spec（音声販売AI：会話仕様 / 状態機械）
+Version: 0.1 (MVP)
+SSOT: docs/ConversationSpec.md
 
 ## 状態遷移図（Mermaid）
 
