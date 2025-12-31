@@ -1,0 +1,42 @@
+name: Spec SSOT Guard
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if non-docs changed without docs update
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # PRで変更されたファイル一覧
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          CHANGED="$(git diff --name-only "origin/${{ github.base_ref }}"...HEAD)"
+
+          echo "Changed files:"
+          echo "$CHANGED"
+
+          # docs/ が変更されているか
+          if echo "$CHANGED" | grep -qE '^docs/'; then
+            echo "docs/ updated ✅"
+            exit 0
+          fi
+
+          # docs以外が変わっているか（.github や README だけの変更は許可したいなら除外する）
+          NON_DOCS="$(echo "$CHANGED" | grep -vE '^(docs/|README\.md$|\.github/)' || true)"
+
+          if [ -n "$NON_DOCS" ]; then
+            echo "ERROR: Non-docs files changed but docs/ not updated."
+            echo "Please update docs/ (SSOT) or add justification in PR."
+            exit 1
+          fi
+
+          echo "Only docs-exempt files changed ✅"
