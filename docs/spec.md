@@ -46,6 +46,12 @@
 ## 永続化
 - 注文は ST_OrderConfirmation で「はい」を受信した時点でDBに保存する。
 
+## 受け入れテスト（要約）
+- 主要フローは ST_Greeting から ST_Closing まで到達する。
+- 住所取得は ST_AddressCollect で完了し、配送確認に進む。
+- 在庫なし/価格拒否/配送日拒否の分岐は所定の遷移に従う。
+- EX_Silence/EX_NoHear のリトライ上限で ST_Closing に到達する。
+
 ## 影響範囲
 - API: 在庫/価格/配送日の取得ツール
 - DB: 注文確定時の永続化
