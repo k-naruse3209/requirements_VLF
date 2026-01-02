@@ -254,7 +254,7 @@ stateDiagram-v2
 
 ### EX_Silence（沈黙検知）
 **トリガー条件**: ユーザーからの音声入力が **5秒間**（MVP default）途絶えた場合
-**OpenQuestion**: [OQ-001](docs/OpenQuestions.md#oq-001) / [OQ-002](docs/OpenQuestions.md#oq-002)
+**OpenQuestion**: [OQ-001](docs/open_questions.md) / [OQ-002](docs/open_questions.md)
 
 **リトライ動作**:
 1. 「もしもし、お聞きになっていますか？」とプロンプト
@@ -265,13 +265,13 @@ stateDiagram-v2
 - 3回連続で無音（計15秒 + プロンプト時間）→ ST_Closing へ遷移し通話終了
 - リトライ中に音声検知 → 元の状態に復帰
 
-**OpenQuestion**: [OQ-001](docs/OpenQuestions.md#oq-001) / [OQ-002](docs/OpenQuestions.md#oq-002)
+**OpenQuestion**: [OQ-001](docs/open_questions.md) / [OQ-002](docs/open_questions.md)
 
 ---
 
 ### EX_NoHear（聞き取り失敗）
 **トリガー条件**: STT（音声認識）の信頼度が閾値未満（MVP: 0.6未満）
-**OpenQuestion**: [OQ-004](docs/OpenQuestions.md#oq-004) / [OQ-005](docs/OpenQuestions.md#oq-005)
+**OpenQuestion**: [OQ-004](docs/open_questions.md) / [OQ-005](docs/open_questions.md)
 
 **リトライ動作**:
 1. 「申し訳ございません、もう一度おっしゃっていただけますか？」
@@ -292,7 +292,7 @@ stateDiagram-v2
 ---
 
 ## 受け入れテスト（Given/When/Then）
-**注記**: OpenQuestion に紐づく仮置き値は、OQ 解決時に更新する（[OQ-001](docs/OpenQuestions.md#oq-001), [OQ-002](docs/OpenQuestions.md#oq-002), [OQ-004](docs/OpenQuestions.md#oq-004), [OQ-005](docs/OpenQuestions.md#oq-005)）。
+**注記**: OpenQuestion に紐づく仮置き値は、OQ 解決時に更新する（[OQ-001](docs/open_questions.md), [OQ-002](docs/open_questions.md), [OQ-004](docs/open_questions.md), [OQ-005](docs/open_questions.md)）。
 
 1. **ST_Greeting**
    - Given: 通話開始直後
@@ -339,20 +339,20 @@ stateDiagram-v2
     - When: 終了メッセージを送出する
     - Then: 通話を終了する
 12. **EX_Silence**
-    - Given: 任意の状態で無音が 5 秒以上続く（[OQ-001](docs/OpenQuestions.md#oq-001)）
-    - When: リトライが 3 回連続で発生する（[OQ-002](docs/OpenQuestions.md#oq-002)）
+    - Given: 任意の状態で無音が 5 秒以上続く（[OQ-001](docs/open_questions.md)）
+    - When: リトライが 3 回連続で発生する（[OQ-002](docs/open_questions.md)）
     - Then: ST_Closing に遷移する
 13. **EX_Silence**
     - Given: 任意の状態で無音が発生する
     - When: リトライ中に音声を検知する
     - Then: 元の状態に復帰する
 14. **EX_NoHear**
-    - Given: ST_RequirementCheck で聞き取り失敗が発生する（[OQ-004](docs/OpenQuestions.md#oq-004)）
+    - Given: ST_RequirementCheck で聞き取り失敗が発生する（[OQ-004](docs/open_questions.md)）
     - When: リトライで聞き取り成功する
     - Then: ST_RequirementCheck に復帰する
 15. **EX_NoHear**
-    - Given: ST_OrderConfirmation で聞き取り失敗が発生する（[OQ-004](docs/OpenQuestions.md#oq-004)）
-    - When: 2 回連続で失敗する（[OQ-005](docs/OpenQuestions.md#oq-005)）
+    - Given: ST_OrderConfirmation で聞き取り失敗が発生する（[OQ-004](docs/open_questions.md)）
+    - When: 2 回連続で失敗する（[OQ-005](docs/open_questions.md)）
     - Then: ST_Closing に遷移する
 - 既に選択済みの商品IDはクリア
 
