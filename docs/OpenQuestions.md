@@ -1,5 +1,6 @@
 # Open Questions（未決事項）
 **注記**: 本ファイルは旧形式。最新は `docs/open_questions.md` を参照。
+**リンク**: docs/open_questions.md
 
 | ID | 質問 | 影響範囲 | 担当 | 期限 | 状態 |
 |---|---|---|---|---|---|
