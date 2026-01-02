@@ -5,6 +5,11 @@
 - 変更は docs/inbox_delta.md を入力として統合する。
 - 詳細は docs/ConversationSpec.md を参照する。
 
+## 参照
+- 詳細仕様: docs/ConversationSpec.md
+- 未決一覧: docs/open_questions.md
+- 決定事項: docs/decisions.md
+
 ## 対象システム
 - 音声販売AIの会話状態機械（MVP）。
 
@@ -28,8 +33,8 @@
 - 価格/在庫/配送日はツール結果のみを使用し、推測しない。取得不能時は OpenQuestion。
 
 ## 例外
-- EX_Silence: 無音5秒で発火、最大3回リトライ後にST_Closing。復帰は元状態。
-- EX_NoHear: STT信頼度0.6未満で発火、2回失敗でST_Closing。復帰は元状態。
+- EX_Silence: 無音5秒で発火、最大3回リトライ後にST_Closing。復帰は元状態（OQ-001/OQ-002）。
+- EX_NoHear: STT信頼度0.6未満で発火、2回失敗でST_Closing。復帰は元状態（OQ-004/OQ-005）。
 - EX_Correction: キーワード検知で ST_RequirementCheck または ST_ProductSuggestion に戻る。
 
 ## 影響範囲
