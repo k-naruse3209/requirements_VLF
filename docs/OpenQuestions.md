@@ -4,7 +4,7 @@
 
 | ID | 質問 | 影響範囲 | 担当 | 期限 | 状態 |
 |---|---|---|---|---|---|
-| [OQ-001](#oq-001) | EX_Silenceの無音閾値は5秒で適切か？（現在MVP default: 5秒） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Open |
+| [OQ-001](#oq-001) | EX_Silenceの無音閾値は5秒で適切か？（現在MVP default: 5秒） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Open（最新は docs/open_questions.md） |
 | [OQ-002](#oq-002) | EX_Silenceのリトライ回数は3回で適切か？（現在MVP default: 3回） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Open |
 | OQ-003 | ツールタイムアウト値は適切か？（getStock/getPrice: 3秒、getDeliveryDate: 5秒） | ConversationSpec §4 ツール契約 | 要確認 | MVP前 | Open |
 | [OQ-004](#oq-004) | STT信頼度閾値は0.6で適切か？（現在MVP default: 0.6未満で失敗判定） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Open |
