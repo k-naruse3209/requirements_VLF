@@ -3,6 +3,7 @@
 ## 概要
 - 本ファイルは仕様の正本（Single Source of Truth）。
 - 変更は docs/inbox_delta.md を入力として統合する。
+- 詳細は docs/ConversationSpec.md を参照する。
 
 ## 対象システム
 - 音声販売AIの会話状態機械（MVP）。
