@@ -16,6 +16,12 @@
 ## 会話フロー（要約）
 - ST_Greeting -> ST_RequirementCheck -> ST_ProductSuggestion -> ST_StockCheck -> ST_PriceQuote -> ST_AddressCollect -> ST_DeliveryCheck -> ST_OrderConfirmation -> ST_Closing
 
+## 主要遷移（要約）
+- 在庫なし: ST_StockCheck -> ST_ProductSuggestion
+- 価格拒否: ST_PriceQuote -> ST_ProductSuggestion
+- 配送日拒否: ST_DeliveryCheck -> ST_Closing
+- 注文確定: ST_OrderConfirmation（「はい」）で永続化して ST_Closing
+
 ## 状態と必須スロット（要約）
 - ST_ProductSuggestion: productId
 - ST_StockCheck: productId
@@ -36,6 +42,9 @@
 - EX_Silence: 無音5秒で発火、最大3回リトライ後にST_Closing。復帰は元状態（OQ-001/OQ-002）。
 - EX_NoHear: STT信頼度0.6未満で発火、2回失敗でST_Closing。復帰は元状態（OQ-004/OQ-005）。
 - EX_Correction: キーワード検知で ST_RequirementCheck または ST_ProductSuggestion に戻る。
+
+## 永続化
+- 注文は ST_OrderConfirmation で「はい」を受信した時点でDBに保存する。
 
 ## 影響範囲
 - API: 在庫/価格/配送日の取得ツール
