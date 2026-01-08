@@ -7,10 +7,13 @@
 | OQ-003 | ツールタイムアウト値は適切か？（getStock/getPrice: 3秒、getDeliveryDate: 5秒） | ConversationSpec §4 ツール契約 | 要確認 | MVP前 | Open |
 | OQ-004 | STT信頼度閾値は0.6で適切か？（現在MVP default: 0.6未満で失敗判定） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Open |
 | OQ-005 | EX_NoHearのリトライ回数は2回で適切か？（現在MVP default: 2回） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Open |
-| OQ-006 | saveOrderのリトライ回数は1回で適切か？（失敗時の再試行回数） | ConversationSpec §4 saveOrder | 要確認 | MVP前 | Open |
-| OQ-007 | EX_Correctionのキーワードリストは十分か？（現在:「やっぱり」「違う」「他の」） | ConversationSpec §3 EX_Correction | 要確認 | MVP前 | Open |
+| OQ-006 | saveOrderのリトライ回数は1回で適切か？（失敗時の再試行回数） | ConversationSpec §4 saveOrder | VLF開発チーム | 2025-01-07 | **Resolved** (ADR-003参照) |
+| OQ-007 | EX_Correctionのキーワードリストは十分か？（現在:「やっぱり」「違う」「他の」） | ConversationSpec §3 EX_Correction | VLF開発チーム | 2025-01-07 | **Resolved** (ADR-004参照、5パターンに拡張) |
 | OQ-008 | ST_DeliveryCheckでユーザー拒否時、ST_Closingで良いか？（代替配送日提案の要否） | ConversationSpec §1 ST_DeliveryCheck | 要確認 | MVP前 | Open |
 | OQ-009 | ST_StockCheckで在庫なし時、代替品提案は自動か手動か？（推薦アルゴリズムの有無） | ConversationSpec §1 ST_StockCheck | 要確認 | MVP前 | Open |
+| OQ-010 | MVP対象の商品カテゴリは何か？（数十SKU程度を想定） | PRD §スコープ（MVP） | 要確認 | MVP前 | Open |
+| OQ-011 | 顧客認証方法は電話番号のみで良いか？（セキュリティ要件） | PRD §スコープ外 | 要確認 | MVP前 | Open |
+| OQ-012 | エスカレーション基準はどこか？（どの時点でオペレーター転送？） | PRD §スコープ外 | 要確認 | MVP前 | Open |
 
 ---
 
@@ -50,3 +53,18 @@
 **背景**: 現在は「ST_ProductSuggestionに戻る」とだけ記載。
 **懸念**: 推薦アルゴリズムの有無が不明（類似商品を自動提案 or オペレーター判断）。
 **確認事項**: MVP範囲での推薦機能の要否。
+
+### OQ-010（MVP対象の商品カテゴリ）
+**背景**: PRDで「数十SKU程度」とだけ記載。具体的なカテゴリが未定義。
+**懸念**: 商品カテゴリにより会話フローや提案方法が変わる可能性。
+**確認事項**: MVP対象商品の具体的なカテゴリ（例: 家電、書籍、食品等）。
+
+### OQ-011（顧客認証方法）
+**背景**: MVP範囲では電話番号のみで顧客を識別する想定。
+**懸念**: セキュリティリスク（なりすまし、誤配送）。
+**確認事項**: 電話番号のみで十分か、追加認証（生年月日、郵便番号等）が必要か。
+
+### OQ-012（エスカレーション基準）
+**背景**: 複雑な問い合わせ時はオペレーターへ転送する想定だが、基準が不明確。
+**懸念**: 転送が多すぎるとコスト削減効果が薄れる、少なすぎると顧客満足度が下がる。
+**確認事項**: どのような状況でエスカレーションするか（例: 3回以上の聞き取り失敗、特定キーワード検出等）。
