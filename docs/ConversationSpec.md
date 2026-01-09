@@ -109,7 +109,7 @@ stateDiagram-v2
 **確認方法**: 暗黙（ツール結果を自動取得）
 
 **失敗時の戻り先**:
-- 在庫なし → ST_ProductSuggestion（代替品提案）
+- 在庫なし → ST_ProductSuggestion（同カテゴリの代替品を自動提案、候補が無ければ要件再確認）
 - ツールエラー → ST_Closing（エラー終了）
 
 **次状態**: ST_PriceQuote
@@ -138,13 +138,14 @@ stateDiagram-v2
 
 **入力例**:
 - （システム内部）productId + address を渡す
+- address は Contact.address を優先し、未取得時は通話中に確認する
 - ツール応答例：`{"deliveryDate": "2025-01-05", "estimatedDays": 3}`
 
 **確認方法**: 明示（「配送は1月5日、3営業日後です。よろしいですか？」）
 
 **失敗時の戻り先**:
 - EX_Silence（無音）
-- ユーザー拒否 → ST_Closing（注文キャンセル）
+- ユーザー拒否 → 代替配送日を1回提示（getDeliveryDateを再実行）→ 再拒否で ST_Closing（注文キャンセル）
 
 **次状態**: ST_OrderConfirmation
 
@@ -195,6 +196,7 @@ stateDiagram-v2
 | ST_StockCheck | 在庫なし | ST_ProductSuggestion | 代替品提案 |
 | ST_PriceQuote | 価格承認 | ST_DeliveryCheck | - |
 | ST_DeliveryCheck | 配送日承認 | ST_OrderConfirmation | - |
+| ST_DeliveryCheck | 配送日拒否 | ST_DeliveryCheck | 代替日を1回提示、再拒否で ST_Closing |
 | ST_OrderConfirmation | 「はい」 | ST_Closing | DB保存実行 |
 | ST_OrderConfirmation | 「いいえ」 | ST_Closing | 注文キャンセル |
 | 任意の状態 | 無音検知 | EX_Silence | - |
@@ -205,23 +207,23 @@ stateDiagram-v2
 ## 例外（聞き取れない/沈黙/言い直し）
 
 ### EX_Silence（沈黙検知）
-**トリガー条件**: ユーザーからの音声入力が **5秒間**（MVP default）途絶えた場合
+**トリガー条件**: ユーザーからの音声入力が **7秒間**（MVP default）途絶えた場合
 
 **リトライ動作**:
 1. 「もしもし、お聞きになっていますか？」とプロンプト
-2. リトライ回数: **3回**（MVP default）
-3. 各リトライ間隔: 5秒
+2. リトライ回数: **2回**（MVP default）
+3. 各リトライ間隔: 7秒
 
 **終了条件**:
-- 3回連続で無音（計15秒 + プロンプト時間）→ ST_Closing へ遷移し通話終了
+- 2回連続で無音（計14秒 + プロンプト時間）→ ST_Closing へ遷移し通話終了
 - リトライ中に音声検知 → 元の状態に復帰
 
-**OpenQuestion**: OQ-001参照（無音閾値5秒、リトライ3回は仮置き）
+**OpenQuestion**: OQ-001参照（MVP default確定: 7秒、リトライ2回）
 
 ---
 
 ### EX_NoHear（聞き取り失敗）
-**トリガー条件**: STT（音声認識）の信頼度が閾値未満（MVP: 0.6未満）
+**トリガー条件**: STT（音声認識）の信頼度が閾値未満（MVP: 0.55未満）
 
 **リトライ動作**:
 1. 「申し訳ございません、もう一度おっしゃっていただけますか？」
@@ -234,7 +236,7 @@ stateDiagram-v2
 ---
 
 ### EX_Correction（言い直し）
-**トリガー条件**: ユーザーが「やっぱり」「違う」「他の」等のキーワードを発話
+**トリガー条件**: ユーザーが「やっぱり」「違う」「他の」「間違えた」「キャンセル」等のキーワードを発話
 
 **動作**:
 - ST_RequirementCheck に戻り、要件確認からやり直し
@@ -266,7 +268,7 @@ stateDiagram-v2
 
 **制約**:
 - 在庫数・在庫有無は **必ずツール結果を使用**。推測・ハードコード禁止。
-- タイムアウト: 3秒（MVP default）
+- タイムアウト: 4秒（MVP default）
 
 ---
 
@@ -290,7 +292,7 @@ stateDiagram-v2
 
 **制約**:
 - 価格は **必ずツール結果を使用**。推測・ハードコード禁止。
-- タイムアウト: 3秒（MVP default）
+- タイムアウト: 4秒（MVP default）
 
 ---
 
@@ -315,7 +317,7 @@ stateDiagram-v2
 
 **制約**:
 - 配送日は **必ずツール結果を使用**。推測・ハードコード禁止。
-- タイムアウト: 5秒（MVP default）
+- タイムアウト: 6秒（MVP default）
 
 ---
 
@@ -361,7 +363,7 @@ stateDiagram-v2
 ## まとめ
 
 - 全状態に「入力例」「確認方法」「失敗時の戻り先」を定義済み
-- EX_Silence は 5秒無音、3回リトライ、計15秒で終了（MVP default）
+- EX_Silence は 7秒無音、2回リトライ、計14秒で終了（MVP default）
 - 価格・在庫・配送日は **ツール結果に限定**（JSON I/O例を記載）
 - Mermaid状態名と本文見出しを完全一致
 - DB保存は ST_OrderConfirmation の「はい」受信時のみ
