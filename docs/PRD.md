@@ -1,5 +1,12 @@
 # PRD（Product Requirements Document）
 
+**プロダクト名**: VLF（Voice sales AI）- 音声販売AI
+**バージョン**: 0.1 (MVP)
+**最終更新**: 2025-01-07
+**SSOT**: docs/PRD.md
+
+---
+
 ## 目的
 電話での購買完結を支援する音声販売AIと、運用管理のための管理画面を一体として提供する。
 
