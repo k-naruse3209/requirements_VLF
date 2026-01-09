@@ -1,8 +1,8 @@
 # PRD（Product Requirements Document）
 
-**プロダクト名**: VLF（Voice sales AI）- 音声販売AI
-**バージョン**: 0.1 (MVP)
-**最終更新**: 2025-01-07
+**プロダクト名**: VLF（Voice sales AI）- 音声販売AI  
+**バージョン**: 0.1 (MVP)  
+**最終更新**: 2025-01-07  
 **SSOT**: docs/PRD.md
 
 ---
@@ -108,3 +108,4 @@
 
 ## 未決事項（担当/期限）
 - OQ-001〜OQ-009は確定済み（docs/OpenQuestions.md）
+- OQ-010〜OQ-012は要確認（docs/OpenQuestions.md）

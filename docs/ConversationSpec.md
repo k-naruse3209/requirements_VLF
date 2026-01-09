@@ -11,7 +11,8 @@ stateDiagram-v2
     ST_RequirementCheck --> ST_ProductSuggestion
     ST_ProductSuggestion --> ST_StockCheck
     ST_StockCheck --> ST_PriceQuote
-    ST_PriceQuote --> ST_DeliveryCheck
+    ST_PriceQuote --> ST_AddressConfirm
+    ST_AddressConfirm --> ST_DeliveryCheck
     ST_DeliveryCheck --> ST_OrderConfirmation
     ST_OrderConfirmation --> ST_Closing
     ST_Closing --> [*]
@@ -22,27 +23,37 @@ stateDiagram-v2
     ST_ProductSuggestion --> EX_Silence: 無音検知
     ST_StockCheck --> EX_Silence: 無音検知
     ST_PriceQuote --> EX_Silence: 無音検知
+    ST_AddressConfirm --> EX_Silence: 無音検知
     ST_DeliveryCheck --> EX_Silence: 無音検知
     ST_OrderConfirmation --> EX_Silence: 無音検知
 
     ST_RequirementCheck --> EX_NoHear: 聞き取り失敗
     ST_ProductSuggestion --> EX_NoHear: 聞き取り失敗
+    ST_AddressConfirm --> EX_NoHear: 聞き取り失敗
     ST_OrderConfirmation --> EX_NoHear: 聞き取り失敗
 
     ST_ProductSuggestion --> EX_Correction: 言い直し要求
+    ST_AddressConfirm --> EX_Correction: 言い直し要求
     ST_OrderConfirmation --> EX_Correction: 言い直し要求
 
     EX_Silence --> ST_Closing: リトライ上限
     EX_Silence --> ST_Greeting: リトライ継続
     EX_Silence --> ST_RequirementCheck: リトライ継続
     EX_Silence --> ST_ProductSuggestion: リトライ継続
+    EX_Silence --> ST_StockCheck: リトライ継続
+    EX_Silence --> ST_PriceQuote: リトライ継続
+    EX_Silence --> ST_AddressConfirm: リトライ継続
+    EX_Silence --> ST_DeliveryCheck: リトライ継続
+    EX_Silence --> ST_OrderConfirmation: リトライ継続
 
     EX_NoHear --> ST_RequirementCheck: 再確認
     EX_NoHear --> ST_ProductSuggestion: 再確認
+    EX_NoHear --> ST_AddressConfirm: 再確認
     EX_NoHear --> ST_OrderConfirmation: 再確認
 
     EX_Correction --> ST_RequirementCheck: 要件から再開
     EX_Correction --> ST_ProductSuggestion: 提案から再開
+    EX_Correction --> ST_AddressConfirm: 住所確認から再開
 ```
 
 ---
@@ -152,6 +163,24 @@ stateDiagram-v2
 - EX_Silence（無音）
 - ユーザー拒否 → ST_ProductSuggestion（再提案）
 
+**次状態**: ST_AddressConfirm
+
+---
+
+### ST_AddressConfirm
+**目的**: 配送先情報の確認（住所と連絡先の整合）
+
+**入力例**:
+- 「配送先のご住所をお伺いしてもよろしいでしょうか？」
+- ユーザー回答例：「東京都渋谷区...」「会社の住所は...」
+
+**確認方法**: 明示（「配送先は〇〇でよろしいですか？」）
+
+**失敗時の戻り先**:
+- EX_NoHear（聞き取り失敗）
+- EX_Silence（無音）
+- EX_Correction（「違う住所で」→ ST_AddressConfirm）
+
 **次状態**: ST_DeliveryCheck
 
 ---
@@ -161,14 +190,14 @@ stateDiagram-v2
 
 **入力例**:
 - （システム内部）productId + address を渡す
-- address は Contact.address を優先し、未取得時は通話中に確認する
+- address は Contact.address を優先し、未取得時は ST_AddressConfirm で確認する
 - ツール応答例：`{"deliveryDate": "2025-01-05", "estimatedDays": 3}`
 
 **確認方法**: 明示（「配送は1月5日、3営業日後です。よろしいですか？」）
 
 **失敗時の戻り先**:
 - EX_Silence（無音）
-- ユーザー拒否 → 代替配送日を1回提示（getDeliveryDateを再実行）→ 再拒否で ST_Closing（注文キャンセル）
+- ユーザー拒否 → 代替配送日を1回提示（getDeliveryDate を再実行）→ 再拒否で ST_Closing（注文キャンセル）
 
 **次状態**: ST_OrderConfirmation
 
@@ -243,13 +272,16 @@ stateDiagram-v2
 | ST_ProductSuggestion | 商品選択確定 | ST_StockCheck | - |
 | ST_StockCheck | 在庫あり | ST_PriceQuote | - |
 | ST_StockCheck | 在庫なし | ST_ProductSuggestion | 代替品提案 |
-| ST_PriceQuote | 価格承認 | ST_DeliveryCheck | - |
+| ST_PriceQuote | 価格承認 | ST_AddressConfirm | - |
+| ST_PriceQuote | 価格拒否 | ST_ProductSuggestion | 再提案 |
+| ST_AddressConfirm | 住所確定 | ST_DeliveryCheck | - |
+| ST_AddressConfirm | 住所差し戻し | ST_AddressConfirm | 再確認 |
 | ST_DeliveryCheck | 配送日承認 | ST_OrderConfirmation | - |
 | ST_DeliveryCheck | 配送日拒否 | ST_DeliveryCheck | 代替日を1回提示、再拒否で ST_Closing |
 | ST_OrderConfirmation | 「はい」 | ST_Closing | DB保存実行 |
 | ST_OrderConfirmation | 「いいえ」 | ST_Closing | 注文キャンセル |
 | 任意の状態 | 無音検知 | EX_Silence | - |
-| 任意の状態 | 聞き取り失敗 | EX_NoHear | - |
+| ユーザー入力が必要な状態 | 聞き取り失敗 | EX_NoHear | ST_Greeting/RequirementCheck/ProductSuggestion/AddressConfirm/OrderConfirmation |
 
 ---
 
@@ -265,14 +297,14 @@ stateDiagram-v2
 
 **終了条件**:
 - 2回連続で無音（計14秒 + プロンプト時間）→ ST_Closing へ遷移し通話終了
-- リトライ中に音声検知 → 元の状態に復帰
+- リトライ中に音声検知 → 元の状態に復帰（EX_Silence の復帰先と一致）
 
 **OpenQuestion**: OQ-001参照（MVP default確定: 7秒、リトライ2回）
 
 ---
 
 ### EX_NoHear（聞き取り失敗）
-**トリガー条件**: STT（音声認識）の信頼度が **0.6未満**（MVP default）
+**トリガー条件**: STT（音声認識）の信頼度が閾値未満（MVP: 0.55未満）
 
 **リトライ動作**:
 1. 「申し訳ございません、もう一度おっしゃっていただけますか？」
@@ -282,7 +314,7 @@ stateDiagram-v2
 - 2回失敗 → ST_Closing（通話終了）
 - 聞き取り成功 → 元の状態に復帰
 
-**OpenQuestion**: OQ-004参照（信頼度閾値0.6は仮置き）、OQ-005参照（リトライ2回は仮置き）
+**OpenQuestion**: OQ-004参照（信頼度閾値0.55は確定）、OQ-005参照（リトライ2回は確定）
 
 ---
 
@@ -299,6 +331,19 @@ stateDiagram-v2
 - 既に選択済みの商品IDはクリア
 
 **OpenQuestion**: OQ-007参照（キーワードリスト5つの妥当性） → ADR-004で解決済み
+
+---
+
+## 注文データ要件（saveOrder に必要な入力）
+
+| フィールド | 取得元 | 補足 |
+|---|---|---|
+| productId | ST_ProductSuggestion | 商品確定済みのID |
+| price | getPrice | ツール結果のみ使用 |
+| deliveryDate | getDeliveryDate | ツール結果のみ使用 |
+| address | ST_AddressConfirm | 明示確認済みの住所 |
+| customerPhone | 通話メタデータ（取得不可時は口頭確認） | 電話番号は復唱確認 |
+| timestamp | システム時刻 | 自動付与 |
 
 ---
 
