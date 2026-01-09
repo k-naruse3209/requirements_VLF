@@ -2,52 +2,49 @@
 
 | ID | 質問 | 影響範囲 | 担当 | 期限 | 状態 |
 |---|---|---|---|---|---|
-| OQ-001 | EX_Silenceの無音閾値は5秒で適切か？（現在MVP default: 5秒） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Open |
-| OQ-002 | EX_Silenceのリトライ回数は3回で適切か？（現在MVP default: 3回） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Open |
-| OQ-003 | ツールタイムアウト値は適切か？（getStock/getPrice: 3秒、getDeliveryDate: 5秒） | ConversationSpec §4 ツール契約 | 要確認 | MVP前 | Open |
-| OQ-004 | STT信頼度閾値は0.6で適切か？（現在MVP default: 0.6未満で失敗判定） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Open |
-| OQ-005 | EX_NoHearのリトライ回数は2回で適切か？（現在MVP default: 2回） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Open |
-| OQ-006 | saveOrderのリトライ回数は1回で適切か？（失敗時の再試行回数） | ConversationSpec §4 saveOrder | VLF開発チーム | 2025-01-07 | **Resolved** (ADR-003参照) |
-| OQ-007 | EX_Correctionのキーワードリストは十分か？（現在:「やっぱり」「違う」「他の」） | ConversationSpec §3 EX_Correction | VLF開発チーム | 2025-01-07 | **Resolved** (ADR-004参照、5パターンに拡張) |
-| OQ-008 | ST_DeliveryCheckでユーザー拒否時、ST_Closingで良いか？（代替配送日提案の要否） | ConversationSpec §1 ST_DeliveryCheck | 要確認 | MVP前 | Open |
-| OQ-009 | ST_StockCheckで在庫なし時、代替品提案は自動か手動か？（推薦アルゴリズムの有無） | ConversationSpec §1 ST_StockCheck | 要確認 | MVP前 | Open |
-| OQ-010 | MVP対象の商品カテゴリは何か？（数十SKU程度を想定） | PRD §スコープ（MVP） | 要確認 | MVP前 | Open |
-| OQ-011 | 顧客認証方法は電話番号のみで良いか？（セキュリティ要件） | PRD §スコープ外 | 要確認 | MVP前 | Open |
-| OQ-012 | エスカレーション基準はどこか？（どの時点でオペレーター転送？） | PRD §スコープ外 | 要確認 | MVP前 | Open |
+| OQ-001 | EX_Silenceの無音閾値は7秒で適切か？（MVP default: 7秒） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Closed |
+| OQ-002 | EX_Silenceのリトライ回数は2回で適切か？（MVP default: 2回） | ConversationSpec §3 EX_Silence | 要確認 | MVP前 | Closed |
+| OQ-003 | ツールタイムアウト値は適切か？（getStock/getPrice: 4秒、getDeliveryDate: 6秒） | ConversationSpec §4 ツール契約 | 要確認 | MVP前 | Closed |
+| OQ-004 | STT信頼度閾値は0.55で適切か？（MVP default: 0.55未満で失敗判定） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Closed |
+| OQ-005 | EX_NoHearのリトライ回数は2回で適切か？（現在MVP default: 2回） | ConversationSpec §3 EX_NoHear | 要確認 | MVP前 | Closed |
+| OQ-006 | saveOrderのリトライ回数は1回で適切か？（失敗時の再試行回数） | ConversationSpec §4 saveOrder | 要確認 | MVP前 | Closed |
+| OQ-007 | EX_Correctionのキーワードリストは十分か？（現在:「やっぱり」「違う」「他の」） | ConversationSpec §3 EX_Correction | 要確認 | MVP前 | Closed |
+| OQ-008 | ST_DeliveryCheckでユーザー拒否時、ST_Closingで良いか？（代替配送日提案の要否） | ConversationSpec §1 ST_DeliveryCheck | 要確認 | MVP前 | Closed |
+| OQ-009 | ST_StockCheckで在庫なし時、代替品提案は自動か手動か？（推薦アルゴリズムの有無） | ConversationSpec §1 ST_StockCheck | 要確認 | MVP前 | Closed |
 
 ---
 
 ## 補足説明
 
 ### OQ-001, OQ-002（EX_Silence関連）
-**背景**: 無音閾値5秒、リトライ3回（計15秒+プロンプト時間）で通話終了する仕様。
-**懸念**: 電話環境によっては5秒が短すぎる/長すぎる可能性。
-**確認事項**: ユーザーテストで実測値を取得し、最適値を決定する。
+**結論**: 無音閾値7秒、リトライ2回（計14秒+プロンプト時間）で確定。
+**理由**: 電話環境の遅延を吸収しつつ、通話の停滞を抑える。
+**運用**: 実測値に基づいて必要なら再調整する。
 
 ### OQ-003（ツールタイムアウト）
-**背景**: 外部API呼び出しのタイムアウトをgetStock/getPrice: 3秒、getDeliveryDate: 5秒に仮設定。
-**懸念**: API応答時間の実測値がない状態での仮置き。
-**確認事項**: API提供元のSLA確認、負荷テストでの実測値取得。
+**結論**: getStock/getPriceは4秒、getDeliveryDateは6秒で確定。
+**理由**: 配送日取得の遅延を見込みつつ、通話停止を防ぐ。
+**運用**: 実測値に基づいて必要なら再調整する。
 
 ### OQ-004, OQ-005（EX_NoHear関連）
-**背景**: STT信頼度0.6未満で失敗判定、2回リトライ。
-**懸念**: STTエンジンの性能により適切な閾値が異なる。
-**確認事項**: 使用するSTTエンジン（例: Google Speech-to-Text, AWS Transcribe）の精度評価。
+**結論**: STT信頼度0.55未満で失敗判定、2回リトライで確定。
+**理由**: 電話音声の雑音を考慮しつつ再確認で吸収する。
+**運用**: 実測値に基づいて必要なら再調整する。
 
 ### OQ-006（saveOrderリトライ）
-**背景**: DB保存失敗時に1回だけリトライ。
-**懸念**: トランザクション特性により適切なリトライ戦略が異なる。
-**確認事項**: DBの特性（ACID保証、ネットワーク遅延）に応じた設計。
+**結論**: 1回リトライで確定。
+**理由**: 二重注文のリスクを抑えつつ救済を確保する。
+**運用**: DB特性と障害傾向に合わせて再調整する。
 
 ### OQ-007（言い直しキーワード）
-**背景**: 「やっぱり」「違う」「他の」の3つのみ。
-**懸念**: カバレッジ不足の可能性（例：「間違えた」「キャンセル」等）。
-**確認事項**: 実会話ログから頻出パターンを抽出。
+**結論**: 「やっぱり」「違う」「他の」「間違えた」「キャンセル」で確定。
+**理由**: MVPで最小限の代表語をカバーする。
+**運用**: 実会話ログで頻出語を追加する。
 
 ### OQ-008（配送日拒否時の動作）
-**背景**: 現在は即座にST_Closingで注文キャンセル。
-**懸念**: 代替配送日を提案する機会を失う。
-**確認事項**: ビジネス要件（代替日提案の価値 vs 実装コスト）。
+**結論**: 1回だけ代替日を提示し、再拒否で終了。
+**理由**: 機会損失を減らしつつ会話を長引かせない。
+**運用**: 代替日提示の成功率を測定する。
 
 ### OQ-009（在庫なし時の代替品提案）
 **背景**: 現在は「ST_ProductSuggestionに戻る」とだけ記載。

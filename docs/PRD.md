@@ -8,147 +8,103 @@
 ---
 
 ## 目的
-
-電話を通じて商品を販売する音声対話AIシステムを構築し、顧客が音声のみで商品選択から注文確定までを完了できる体験を提供する。
-
-**ビジネス目標**:
-- 電話注文の自動化による運用コスト削減
-- 24時間365日の注文受付対応
-- オペレーター不足の解消
-
----
+電話での購買完結を支援する音声販売AIと、運用管理のための管理画面を一体として提供する。
 
 ## 対象ユーザー
-
-### プライマリユーザー
-- 電話で商品を購入したい顧客
-- 年齢層: 40代以上（電話注文に慣れた層）
-- インターネット操作に不慣れ、または画面操作を避けたいユーザー
-
-### セカンダリユーザー
-- 運用管理者（注文履歴の確認、システム監視）
-- カスタマーサポート（エスカレーション対応）
-
----
+一次ユーザー: 電話で商品購入/相談を行う顧客  
+二次ユーザー: 受電オペレーター/CS  
+管理ユーザー: 管理画面で運用を行う社内担当者
 
 ## 提供価値
-
-### 顧客への価値
-1. **利便性**: 電話一本で注文完了
-2. **即時性**: 在庫・価格・配送日をリアルタイムに確認
-3. **安心感**: 注文内容の明確な確認プロセス
-
-### ビジネスへの価値
-1. **コスト削減**: オペレーター人件費の削減
-2. **スケール**: 同時多数の電話対応が可能
-3. **データ蓄積**: 会話ログによる顧客理解の向上
-
----
+- 顧客: 電話だけで要件確認から注文確定まで完了できる
+- 運営: 応対の標準化と問い合わせ削減
+- 管理: 通話状況や予定を把握し、連絡先・スケジュールを管理できる
 
 ## スコープ（MVP）
+- 音声通話フロー（ConversationSpec に準拠）
+- 在庫/価格/配送日取得と注文保存（ツール連携）
+- テレフォニー: Twilio Media Streams（μ-law 8kHz / G.711 PCMU）
+- WSゲートウェイ: Node.js（TypeScript）
+- 管理画面（linguaflow-admin）の認証（メール/パスワードログイン、トークン更新、ログアウト）
+- 管理画面 Home: 進行中通話一覧（status=up）
+- 管理画面 Call Logs: 通話ログ一覧、会話詳細（メッセージと翻訳の切替表示）
+- 管理画面 Contacts: 連絡先の作成/編集/削除（name, phone_number, address, description）
+- 管理画面 Call Schedules: 通話予定の作成/編集/削除（contact_ids, start_at, status）
+- 管理画面 Messages: user/assistant の会話記録と翻訳テキストを保存/閲覧
+- 管理画面のAPI（/api/v1）: /contacts, /call_schedules, /call_logs, /call_logs/:id/messages
+- 管理画面のAPI（/api/v1）: /login, /logout, /refresh
 
-### 機能
-1. **会話フロー管理**
-   - 8つの通常状態（ST_Greeting → ST_Closing）
-   - 3つの例外処理（EX_Silence, EX_NoHear, EX_Correction）
+## 管理画面のデータ定義（MVP）
+### Call Logs
+- status: up, down
+- call_type: inbound, outbound
+- 表示フィールド: id, contact_name, phone_number, call_type, status, created_at, updated_at
 
-2. **ツール連携**
-   - 在庫確認（getStock）
-   - 価格取得（getPrice）
-   - 配送日確認（getDeliveryDate）
-   - 注文保存（saveOrder）
+### Messages
+- role: user, assistant
+- 表示フィールド: content, translation, role, created_at
 
-3. **エラーハンドリング**
-   - 無音検知（5秒閾値、3回リトライ）
-   - 聞き取り失敗（信頼度0.6未満、2回リトライ）
-   - 言い直し対応（要件確認からやり直し）
+### Contacts
+- 必須フィールド: phone_number
+- 表示/編集フィールド: name, phone_number, address, description, created_at, updated_at
 
-### 対象商品カテゴリ
-- MVP範囲: 限定的な商品カタログ（数十SKU程度）
-- 具体的なカテゴリ: **OpenQuestion OQ-010**
+### Call Schedules
+- status: failed, pending, processing, completed, canceled, no_answer
+- 表示フィールド: id, contact_name, phone_number, status, start_at, created_at, updated_at
+- 作成フィールド: contact_ids, status, start_at
+- 更新フィールド: status, start_at
 
-### 非機能要件
-- ツールタイムアウト: 3-5秒（MVP default）
-- 音声認識信頼度閾値: 0.6（MVP default）
-- トランザクション保証: saveOrder時のみ
+## 管理画面の画面仕様（MVP）
+### 認証
+- ログイン: email/passwordで認証、成功時にトークン保存
+- トークン更新: 401時に /refresh を実行し再試行
+- ログアウト: /logout 実行でセッション破棄
 
----
+### Home
+- 目的: 進行中通話の監視
+- 一覧: call_logs（status=up）
+- 更新: 5秒ポーリング
+- 操作: 会話詳細の表示
+
+### Call Logs
+- 一覧: call_logs（全件）
+- フィルタ: status（APIクエリ）
+- フィルタ: テーブル内の全文検索（クライアント側）
+- 並び順: created_at 降順（新しい通話が上）
+- 操作: 行選択/コンテキストメニューから会話詳細を表示
+- 会話詳細: message一覧とtranslationの表示切替
+- 会話詳細の並び順: created_at 昇順（古い発話が上）
+
+### Contacts
+- 一覧: contacts
+- フィルタ: phone_number（APIクエリ）
+- 操作: 作成/編集/削除
+- 入力バリデーション: phone_numberは数字のみ
+
+### Call Schedules
+- 一覧: call_schedules
+- フィルタ: phone_number, status, date_range（APIクエリ）
+- 操作: 作成/編集/削除
+- 作成: contact_idsの複数選択、statusとstart_atを指定
+- 更新: statusとstart_atを更新
 
 ## スコープ外（Phase 2以降）
-
-### 機能拡張
-- 決済処理（MVP: 注文確定のみ、決済は別チャネル）
-- 複数商品の同時注文（MVP: 1商品のみ）
-- 顧客認証・ログイン（MVP: 電話番号のみで識別）
-- 注文履歴の参照（MVP: 新規注文のみ）
-- 推薦アルゴリズム（MVP: 在庫なし時の代替品提案は手動）
-
-### 対応範囲
-- 多言語対応（MVP: 日本語のみ）
-- 方言・アクセント対応（MVP: 標準語想定）
-- 複雑な問い合わせ（MVP: エスカレーション→オペレーター）
-
----
+- 管理ユーザーの権限管理（RBAC）とユーザー管理
+- 監査ログ、変更履歴、データエクスポート/インポート
+- 高度な分析ダッシュボード（KPI可視化の自動化）
 
 ## 成功指標（KPI）
-
-### MVP期間の評価指標
-
-#### 技術指標
-- **注文完了率**: 70%以上（通話開始から注文確定まで）
-- **音声認識精度**: 85%以上（STT信頼度0.6以上の割合）
-- **ツールタイムアウト率**: 5%以下
-
-#### ビジネス指標
-- **平均通話時間**: 5分以内（ST_Greeting → ST_Closing）
-- **エスカレーション率**: 20%以下（オペレーターへの転送）
-- **顧客満足度**: NPS 30以上（通話後アンケート）
-
----
+- 注文完了率（注文確定/通話開始）
+- 途中離脱率（無音終了・拒否）
+- 管理画面の運用効率（連絡先/通話予定の更新時間）
 
 ## 前提
-
-### 技術前提
-- STT（音声認識）エンジンは既存サービスを利用（Google/AWS等）
-- TTS（音声合成）エンジンは既存サービスを利用
-- ツールAPI（getStock等）は別チームが提供
-- DBは既存のトランザクションDBを利用
-
-### ビジネス前提
-- MVP期間: 3ヶ月（開発2ヶ月+検証1ヶ月）
-- 対象顧客: 既存顧客ベース（新規獲得はPhase 2）
-- 電話番号: 専用ダイヤルを新規発番
-
-### 制約
-- 通話録音は法的要件に準拠（録音開始の通知必須）
-- 個人情報保護法に準拠（電話番号、住所の取り扱い）
-- 金融商品取引法非該当（決済機能なし）
-
----
+- 在庫/価格/配送日は必ずツール結果を使用する
+- 管理画面は認証必須で /api/v1 を利用する
+- 通話ログは phone_number で連絡先に紐付く
+- 無音検知は7秒、リトライ2回（MVP default）
+- STT信頼度閾値は0.55（MVP default）
+- ツールタイムアウトは getStock/getPrice 4秒、getDeliveryDate 6秒（MVP default）
 
 ## 未決事項（担当/期限）
-
-**詳細は OpenQuestions.md を参照**
-
-主要な未決事項:
-- OQ-001: EX_Silenceの無音閾値（5秒は適切か？）
-- OQ-009: 在庫なし時の代替品提案（自動 or 手動？）
-- OQ-010: MVP対象の商品カテゴリ（未定義）
-- OQ-011: 顧客認証方法（電話番号のみで良いか？）（新規）
-- OQ-012: エスカレーション基準（どの時点でオペレーター転送？）（新規）
-
----
-
-## 関連ドキュメント
-
-- **会話仕様**: ConversationSpec.md
-- **未決事項**: OpenQuestions.md
-- **設計判断**: ADR/
-
----
-
-## 改訂履歴
-
-| 日付 | バージョン | 変更内容 | 担当 |
-|------|-----------|---------|------|
-| 2025-01-07 | 0.1 | 初版作成（MVP範囲を定義） | spec-editor |
+- OQ-001〜OQ-009は確定済み（docs/OpenQuestions.md）
