@@ -79,12 +79,23 @@ SSOT: docs/DetailedDesign.md
 - customerPhone
 - timestamp
 
+### データモデル対応（API ⇔ SQLite）
+- Contact -> contacts
+- CallLog -> calls
+- CallLog.phone_number -> calls.from_number / calls.to_number
+- Message -> utterances
+- CallSchedule -> call_schedules
+
+## SQLiteスキーマ（MVP）
+永続化はSQLiteを使用する。IDはULID（TEXT）、時刻はUTCのISO-8601文字列。
+詳細なDDLは `docs/DBSchema.sql` を参照。
+
 ## 認証設計（管理画面）
 ### ログイン
 - POST /api/v1/login
 - 入力: email, password
-- 出力: token（Bearerとして使用）
-- refresh_token はHTTP Cookieで発行
+- 出力: token（JWT / Bearer）
+- refresh_token はHTTP Cookieで発行（MVP default: 30日）
 
 ### トークン更新
 - POST /api/v1/refresh
@@ -94,6 +105,11 @@ SSOT: docs/DetailedDesign.md
 ### ログアウト
 - POST /api/v1/logout
 - refresh_token を破棄しセッション終了
+
+### トークン方針（MVP default）
+- Access token: 15分
+- Refresh token: 30日
+- refresh_token はDBにハッシュ保存
 
 ## 管理API設計（MVP）
 ### Contacts
@@ -131,6 +147,13 @@ SSOT: docs/DetailedDesign.md
 - 並び順: created_at 降順
 - 会話詳細: messages を created_at 昇順で表示
 
+### 管理画面向けクエリ設計（SQLite）
+- Call Logs 一覧: calls を started_at DESC でページング
+- Call Logs フィルタ: status, customer_id, date range（started_at）
+- Call Logs 詳細: calls + utterances + transcripts + notes + tags を call_id で取得
+- Contacts/Customers: customer_id 単位で calls 集計（件数/直近通話）
+- Notes: author_id / category / score で絞り込み
+
 ### Contacts
 - 一覧: contacts
 - 操作: 作成/編集/削除
@@ -164,6 +187,34 @@ ConversationSpec の状態一覧と遷移表に準拠する。
 ## 監視・ログ
 - ツールエラーはエラーログに記録する（ConversationSpec 準拠）
 - 管理APIはリクエスト/レスポンスのログを出力する
+
+## 永続化フロー（SQLite）
+### 保存タイミング
+- 通話開始（CallLog生成）: calls.started_at を登録
+- 会話中の発話: utterances に逐次保存
+- 文字起こし: transcripts に通話単位で保存（必要ならセグメント単位）
+- 通話終了: calls.ended_at / duration_sec / status を更新
+- 評価メモ: notes に作成（担当者/スコア/カテゴリ）
+- タグ付け: call_tags で多対多
+
+### 責務分離
+- WSゲートウェイ: 音声中継のみ（DB書き込みなし）
+- オーケストレータ/API: DB書き込みの唯一の責務
+- 管理画面: 読み取り中心（作成はnotes/tagsのみ）
+
+### SQLiteリポジトリ層（実装方針）
+- 単一DBファイル（例: data/app.db）を起点に接続を共有
+- 書き込みはリポジトリ経由で実行し、APIはリポジトリのみを利用
+- 例外はAPI層で握り、ログに必要情報（call_id, endpoint）を残す
+
+### リポジトリI/O（最小）
+- CallsRepo: create/start, finish/update, list, findById
+- UtterancesRepo: create, listByCallId
+- TranscriptsRepo: create, listByCallId
+- NotesRepo: create, listByCallId, listByFilters
+- TagsRepo: upsert, attachToCall, listByCallId
+- ContactsRepo: create/update, list, findByPhone
+- CallSchedulesRepo: create/update, listByFilters
 
 ## 非機能要件（MVP）
 - 認証必須の管理画面

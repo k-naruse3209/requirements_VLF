@@ -1,0 +1,11 @@
+{
+  "name": "vlf-db",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "main": "src/index.js",
+  "dependencies": {
+    "better-sqlite3": "^11.5.0",
+    "ulid": "^2.3.0"
+  }
+}

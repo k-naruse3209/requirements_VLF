@@ -27,31 +27,33 @@ SSOT: docs/ImplementationTickets.md
    - 受け入れ条件: 変換なしでエンドツーエンドに成立する
 
 ### B. 管理API（/api/v1）
-9. 認証API（login/logout/refresh）
+9. SQLiteデータレイヤー（スキーマ/接続/リポジトリ）
+   - 受け入れ条件: docs/DBSchema.sql に準拠しULID/UTCで永続化できる
+10. 認証API（login/logout/refresh）
    - 受け入れ条件: トークン更新と401ハンドリングが設計通り
-10. Contacts API（CRUD + phone_number filter）
+11. Contacts API（CRUD + phone_number filter）
    - 受け入れ条件: PRDのデータ定義と一致
-11. Call Logs API（list/status filter + create/update + delete）
+12. Call Logs API（list/status filter + create/update + delete）
    - 受け入れ条件: auth要否とフィルタが設計通り
-12. Messages API（call_logs/:id/messages のlist/create）
+13. Messages API（call_logs/:id/messages のlist/create）
    - 受け入れ条件: auth要否が設計通り
-13. Call Schedules API（CRUD + phone_number/status/date_range filter）
+14. Call Schedules API（CRUD + phone_number/status/date_range filter）
    - 受け入れ条件: PRDのフィルタ要件と一致
 
 ### C. 管理画面（linguaflow-admin）
-14. 認証フロー（login/refresh/logout）
+15. 認証フロー（login/refresh/logout）
    - 受け入れ条件: 未認証時のリダイレクトと401時の更新
-15. Home（進行中通話一覧、ポーリング）
+16. Home（進行中通話一覧、ポーリング）
    - 受け入れ条件: status=upのみ、5秒更新
-16. Call Logs 一覧・詳細
+17. Call Logs 一覧・詳細
    - 受け入れ条件: 一覧はcreated_at降順、詳細はcreated_at昇順
-17. Contacts 管理（作成/編集/削除）
+18. Contacts 管理（作成/編集/削除）
    - 受け入れ条件: phone_numberの入力制約（数字のみ）
-18. Call Schedules 管理（作成/編集/削除）
+19. Call Schedules 管理（作成/編集/削除）
    - 受け入れ条件: contact_ids複数選択、status/start_at設定
 
 ### D. 運用・監視
-19. エラーログ記録（ツール/管理API/認証）
+20. エラーログ記録（ツール/管理API/認証）
    - 受け入れ条件: 失敗時に必要情報が記録される
-20. KPI計測の基本ログ
+21. KPI計測の基本ログ
    - 受け入れ条件: 注文完了率/離脱率/例外率の集計に必要なイベントが揃う
