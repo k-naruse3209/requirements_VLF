@@ -11,6 +11,7 @@ const isVoipPath = (url) => {
   return (
     url === "/" ||
     url.startsWith("/voice") ||
+    url.startsWith("/twilio/stream-status") ||
     url.startsWith("/token") ||
     url.startsWith("/app.js") ||
     url.startsWith("/twilio.min.js") ||
