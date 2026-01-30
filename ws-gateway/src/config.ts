@@ -8,4 +8,7 @@ export const config = {
   realtimeSchema: process.env.REALTIME_SCHEMA || "flat",
   realtimeAudioRate: Number(process.env.REALTIME_AUDIO_RATE || 24000),
   realtimeCommitFrames: Number(process.env.REALTIME_COMMIT_FRAMES || 50),
+  realtimeInstructions:
+    process.env.REALTIME_INSTRUCTIONS ||
+    "You are a helpful assistant. Always respond in Japanese. Do not switch languages.",
 };

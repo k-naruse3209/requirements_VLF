@@ -197,6 +197,7 @@ wss.on("connection", (ws: WebSocket) => {
             type: "session.update",
             session: {
               type: "realtime",
+              instructions: config.realtimeInstructions,
               audio: {
                 input: { format: { type: "audio/pcm", rate: outputSampleRate } },
                 output: { format: { type: "audio/pcm", rate: outputSampleRate }, voice: "alloy" },
@@ -207,6 +208,7 @@ wss.on("connection", (ws: WebSocket) => {
         : {
             type: "session.update",
             session: {
+              instructions: config.realtimeInstructions,
               input_audio_format: "pcm16",
               output_audio_format: "pcm16",
               voice: "alloy",
