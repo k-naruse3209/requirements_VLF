@@ -1,10 +1,16 @@
 import http from "node:http";
+import fs from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
+import { createConversationController, type Product } from "./conversation.js";
+import { createToolClient } from "./tools.js";
 
 type TwilioEvent =
   | { event: "connected" }
-  | { event: "start"; start: { streamSid: string; callSid: string } }
+  | {
+      event: "start";
+      start: { streamSid: string; callSid: string; customParameters?: Record<string, string> };
+    }
   | { event: "media"; media: { payload: string; track: "inbound" | "outbound" } }
   | { event: "stop" }
   | { event: "mark"; mark: { name: string } };
@@ -27,6 +33,51 @@ const safeJson = (data: string): unknown => {
 };
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
+
+const extractContentText = (content: unknown): string | null => {
+  if (!Array.isArray(content)) return null;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const piece = part as Record<string, unknown>;
+    if (piece.type === "input_text" || piece.type === "text") {
+      const text = piece.text ?? piece.value;
+      if (typeof text === "string" && text.trim()) return text;
+    }
+    if (piece.type === "audio" && typeof piece.transcript === "string" && piece.transcript.trim()) {
+      return piece.transcript;
+    }
+  }
+  return null;
+};
+
+const extractUserTranscript = (
+  payload: RealtimeEvent
+): { text: string; confidence: number | null } | null => {
+  if (payload.type === "input_audio_transcription.completed") {
+    const text = (payload as { transcript?: string; text?: string }).transcript ||
+      (payload as { text?: string }).text;
+    const confidence = (payload as { confidence?: number }).confidence;
+    if (typeof text === "string" && text.trim()) {
+      return { text, confidence: Number.isFinite(confidence) ? confidence : null };
+    }
+  }
+  if (payload.type === "conversation.item.input_audio_transcription.completed") {
+    console.log(`${logPrefix("transcription")} input_audio_transcription.completed`, JSON.stringify(payload));
+    const text = (payload as { transcript?: string; text?: string }).transcript ||
+      (payload as { text?: string }).text;
+    if (typeof text === "string" && text.trim()) {
+      return { text, confidence: null };
+    }
+  }
+  if (payload.type === "conversation.item.added" || payload.type === "conversation.item.created") {
+    const item = (payload as { item?: { role?: string; content?: unknown } }).item;
+    if (item?.role === "user") {
+      const text = extractContentText(item.content);
+      if (text) return { text, confidence: null };
+    }
+  }
+  return null;
+};
 
 const muLawDecodeSample = (value: number) => {
   const muLaw = (~value) & 0xff;
@@ -95,6 +146,28 @@ const downsample = (input: Int16Array, factor: number) => {
   return output;
 };
 
+const loadCatalog = (): Product[] => {
+  if (!config.productCatalogPath) return [];
+  try {
+    const raw = fs.readFileSync(config.productCatalogPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as Product[];
+    if (Array.isArray(parsed?.items)) return parsed.items as Product[];
+  } catch (err) {
+    console.error("[catalog] failed to load", err);
+  }
+  return [];
+};
+
+const productCatalog = loadCatalog();
+const toolClient = createToolClient({
+  baseUrl: config.toolBaseUrl,
+  stockTimeoutMs: config.toolStockTimeoutMs,
+  priceTimeoutMs: config.toolPriceTimeoutMs,
+  deliveryTimeoutMs: config.toolDeliveryTimeoutMs,
+  orderTimeoutMs: config.toolOrderTimeoutMs,
+});
+
 const createRealtimeSocket = () => {
   if (!config.openaiApiKey) return null;
   const url = `${config.realtimeUrl}?model=${encodeURIComponent(config.realtimeModel)}`;
@@ -122,11 +195,17 @@ wss.on("connection", (ws: WebSocket) => {
   let sessionCreatedLogged = false;
   let audioFrameCount = 0;
   let bufferedSamples = 0;
-  let awaitingResponse = false;
+  let commitPending = false;
+  let commitTimer: NodeJS.Timeout | null = null;
+  let queuedPrompt: string | null = null;
+  let conversationStarted = false;
+  let stopReceived = false;
   const useAudioSchema = config.realtimeSchema === "audio";
   const outputSampleRate = config.realtimeAudioRate;
   const resampleFactor = Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
   const minCommitSamples = Math.ceil(outputSampleRate / 10);
+  const vadEnabled = true;
+  let pendingTranscript: { text: string; confidence: number | null; ts: number } | null = null;
 
   console.log(`${logPrefix(wsId)} connected`);
 
@@ -140,7 +219,9 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const createResponse = (instructions?: string) => {
+    if (!instructions) return;
     if (responseActive || responsePending) {
+      queuedPrompt = instructions;
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
@@ -171,6 +252,37 @@ wss.on("connection", (ws: WebSocket) => {
     sendToRealtime(payload);
   };
 
+  const processCommittedTurn = () => {
+    if (!commitPending) return;
+    if (!pendingTranscript) return;
+    const transcript = pendingTranscript;
+    pendingTranscript = null;
+    commitPending = false;
+    if (commitTimer) {
+      clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+    if (responseActive || responsePending) {
+      console.log(`${logPrefix(wsId)} skip transcript (assistant speaking)`, transcript.text);
+      return;
+    }
+    conversation.onUserTranscript(transcript.text, transcript.confidence);
+  };
+
+  const markCommitted = () => {
+    commitPending = true;
+    conversation.onUserCommitted();
+    processCommittedTurn();
+    if (!commitTimer) {
+      commitTimer = setTimeout(() => {
+        if (!commitPending) return;
+        commitPending = false;
+        commitTimer = null;
+        console.log(`${logPrefix(wsId)} committed without transcript`);
+      }, 500);
+    }
+  };
+
   const sendToTwilio = (audioBase64: string) => {
     if (!streamSid) return;
     ws.send(
@@ -188,10 +300,51 @@ wss.on("connection", (ws: WebSocket) => {
     return;
   }
 
+  const conversation = createConversationController({
+    catalog: productCatalog,
+    toolClient,
+    config: {
+      silenceTimeoutMs: config.silenceTimeoutMs,
+      silenceRetriesMax: config.silenceRetriesMax,
+      noHearRetriesMax: config.noHearRetriesMax,
+      sttConfidenceThreshold: config.sttConfidenceThreshold,
+      correctionKeywords: config.correctionKeywords,
+      orderRetryMax: config.orderRetryMax,
+      deliveryRetryMax: config.deliveryRetryMax,
+    },
+    onPrompt: (message) => {
+      const prompt = message || config.testPrompt;
+      if (!prompt) return;
+      createResponse(prompt);
+    },
+    onLog: (message, data) => {
+      console.log(`${logPrefix(wsId)} ${message}`, data ?? "");
+    },
+  });
+
+  const maybeStartConversation = () => {
+    if (conversationStarted) return;
+    if (!realtimeReady || !streamSid) return;
+    conversationStarted = true;
+    conversation.start();
+  };
+
   realtime = createRealtimeSocket();
   if (realtime) {
     realtime.on("open", () => {
       realtimeReady = true;
+      const inputAudio = {
+        format: { type: "audio/pcm", rate: outputSampleRate },
+        ...(config.realtimeTranscriptionModel
+          ? { transcription: { model: config.realtimeTranscriptionModel } }
+          : {}),
+        turn_detection: {
+          type: "server_vad",
+          silence_duration_ms: 800,
+          create_response: false,
+          interrupt_response: true,
+        },
+      };
       const payload = useAudioSchema
         ? {
             type: "session.update",
@@ -199,7 +352,7 @@ wss.on("connection", (ws: WebSocket) => {
               type: "realtime",
               instructions: config.realtimeInstructions,
               audio: {
-                input: { format: { type: "audio/pcm", rate: outputSampleRate } },
+                input: inputAudio,
                 output: { format: { type: "audio/pcm", rate: outputSampleRate }, voice: "alloy" },
               },
               output_modalities: ["audio"],
@@ -217,12 +370,14 @@ wss.on("connection", (ws: WebSocket) => {
                 type: "server_vad",
                 silence_duration_ms: 800,
                 create_response: false,
+                interrupt_response: true,
               },
             },
           };
       logOutgoing("session.update", payload);
       sendToRealtime(payload);
       console.log(`${logPrefix(wsId)} realtime connected`);
+      maybeStartConversation();
     });
 
     realtime.on("message", (data, isBinary) => {
@@ -243,9 +398,11 @@ wss.on("connection", (ws: WebSocket) => {
         if (error?.code === "conversation_already_has_active_response") {
           responsePending = false;
         }
-        if (error?.code === "input_audio_buffer_commit_empty") {
-          awaitingResponse = false;
-        }
+      }
+      const userTranscript = extractUserTranscript(payload);
+      if (userTranscript) {
+        pendingTranscript = { ...userTranscript, ts: Date.now() };
+        processCommittedTurn();
       }
       if (payload.type === "session.created" && !sessionCreatedLogged) {
         sessionCreatedLogged = true;
@@ -305,10 +462,17 @@ wss.on("connection", (ws: WebSocket) => {
       if (payload.type === "response.created") {
         responseActive = true;
         responsePending = false;
+        conversation.onAssistantStart();
       }
       if (payload.type === "response.done") {
         responseActive = false;
         responsePending = false;
+        conversation.onAssistantDone();
+        if (queuedPrompt) {
+          const pending = queuedPrompt;
+          queuedPrompt = null;
+          createResponse(pending);
+        }
         if (lastOutputItemId) {
           sendToRealtime({
             type: "conversation.item.retrieve",
@@ -316,16 +480,21 @@ wss.on("connection", (ws: WebSocket) => {
           });
         }
       }
-      if (payload.type === "input_audio_buffer.speech_stopped" && useAudioSchema) {
-        if (awaitingResponse && !responseActive) {
-          createResponse();
-          awaitingResponse = false;
+      if (payload.type === "input_audio_buffer.speech_started") {
+        if (responseActive || responsePending) {
+          logOutgoing("response.cancel", { type: "response.cancel" });
+          sendToRealtime({ type: "response.cancel" });
+          responseActive = false;
+          responsePending = false;
+          queuedPrompt = null;
         }
+        conversation.onSpeechStarted();
+      }
+      if (payload.type === "input_audio_buffer.speech_stopped") {
+        conversation.onSpeechStopped();
       }
       if (payload.type === "input_audio_buffer.committed") {
-        if (!responseActive) {
-          createResponse();
-        }
+        markCommitted();
       }
     });
 
@@ -349,9 +518,12 @@ wss.on("connection", (ws: WebSocket) => {
       case "start":
         streamSid = event.start.streamSid;
         console.log(`${logPrefix(wsId)} stream started`, event.start);
-        if (realtimeReady && config.testPrompt) {
-          createResponse(config.testPrompt);
+        if (event.start.customParameters) {
+          const { customer_phone: customerPhone, address } = event.start.customParameters;
+          conversation.setCustomerPhone(customerPhone);
+          conversation.setAddress(address);
         }
+        maybeStartConversation();
         break;
       case "media":
         mediaCount += 1;
@@ -365,17 +537,14 @@ wss.on("connection", (ws: WebSocket) => {
             const upsampled = upsample(pcm16, resampleFactor);
             const pcmBuffer = Buffer.from(upsampled.buffer);
             sendToRealtime({ type: "input_audio_buffer.append", audio: pcmBuffer.toString("base64") });
-            audioFrameCount += 1;
-            bufferedSamples += upsampled.length;
-            if (
-              audioFrameCount >= config.realtimeCommitFrames &&
-              bufferedSamples >= minCommitSamples &&
-              !awaitingResponse
-            ) {
-              sendToRealtime({ type: "input_audio_buffer.commit" });
-              awaitingResponse = true;
-              audioFrameCount = 0;
-              bufferedSamples = 0;
+            if (!vadEnabled) {
+              audioFrameCount += 1;
+              bufferedSamples += upsampled.length;
+              if (audioFrameCount >= config.realtimeCommitFrames && bufferedSamples >= minCommitSamples) {
+                sendToRealtime({ type: "input_audio_buffer.commit" });
+                audioFrameCount = 0;
+                bufferedSamples = 0;
+              }
             }
           } else {
             sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
@@ -384,11 +553,11 @@ wss.on("connection", (ws: WebSocket) => {
         }
         break;
       case "stop":
+        stopReceived = true;
         console.log(`${logPrefix(wsId)} stream stopped`);
         hasBufferedAudio = false;
-        if (realtimeReady && useAudioSchema && bufferedSamples >= minCommitSamples && !awaitingResponse) {
+        if (!vadEnabled && realtimeReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
           sendToRealtime({ type: "input_audio_buffer.commit" });
-          awaitingResponse = true;
           audioFrameCount = 0;
           bufferedSamples = 0;
         }
@@ -399,10 +568,13 @@ wss.on("connection", (ws: WebSocket) => {
   });
 
   ws.on("close", (code, reason) => {
-    console.log(`${logPrefix(wsId)} disconnected`, { code, reason: reason.toString() });
-    if (realtime && realtime.readyState === WebSocket.OPEN) {
-      realtime.close();
-    }
+    console.log(`${logPrefix(wsId)} disconnected`, {
+      code,
+      reason: reason.toString(),
+      stopReceived,
+      closedBy: "peer",
+      closedAtMs: Date.now(),
+    });
   });
 
   ws.on("error", (err) => {
