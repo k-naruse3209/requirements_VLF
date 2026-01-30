@@ -307,6 +307,8 @@ wss.on("connection", (ws: WebSocket) => {
       silenceTimeoutMs: config.silenceTimeoutMs,
       silenceRetriesMax: config.silenceRetriesMax,
       noHearRetriesMax: config.noHearRetriesMax,
+      silenceAutoPromptEnabled: config.silenceAutoPromptEnabled,
+      noHearAutoPromptEnabled: config.noHearAutoPromptEnabled,
       sttConfidenceThreshold: config.sttConfidenceThreshold,
       correctionKeywords: config.correctionKeywords,
       orderRetryMax: config.orderRetryMax,

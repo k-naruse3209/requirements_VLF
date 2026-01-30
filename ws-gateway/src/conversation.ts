@@ -36,6 +36,8 @@ type ConversationConfig = {
   silenceTimeoutMs: number;
   silenceRetriesMax: number;
   noHearRetriesMax: number;
+  silenceAutoPromptEnabled: boolean;
+  noHearAutoPromptEnabled: boolean;
   sttConfidenceThreshold: number;
   correctionKeywords: string[];
   orderRetryMax: number;
@@ -114,7 +116,6 @@ export const createConversationController = ({
   let silenceTimer: NodeJS.Timeout | null = null;
   let noHearTimer: NodeJS.Timeout | null = null;
   let waitingForCommit = false;
-  const silencePromptsEnabled = false;
 
   const context: ConversationContext = {
     suggestedProductIds: [],
@@ -137,6 +138,7 @@ export const createConversationController = ({
 
   const startSilenceTimer = () => {
     if (waitingForCommit) return;
+    if (!config.silenceAutoPromptEnabled) return;
     if (silenceTimer) clearTimeout(silenceTimer);
     silenceTimer = setTimeout(() => {
       handleSilenceTimeout().catch((err) => onLog("silence handler failed", err));
@@ -145,6 +147,7 @@ export const createConversationController = ({
 
   const startNoHearTimer = () => {
     if (noHearTimer) clearTimeout(noHearTimer);
+    if (!config.noHearAutoPromptEnabled) return;
     noHearTimer = setTimeout(() => {
       handleNoHearTimeout().catch((err) => onLog("nohear handler failed", err));
     }, 3000);
@@ -320,7 +323,7 @@ export const createConversationController = ({
       onLog("silence.skipped", { waitingForCommit: true });
       return;
     }
-    if (!silencePromptsEnabled) {
+    if (!config.silenceAutoPromptEnabled) {
       onLog("silence.skipped", { autoPrompt: false });
       return;
     }
@@ -533,13 +536,15 @@ export const createConversationController = ({
       if (noHearTimer) clearTimeout(noHearTimer);
     },
     onSpeechStopped: () => {
-      return;
+      if (!waitingForCommit && config.noHearAutoPromptEnabled) {
+        startNoHearTimer();
+      }
     },
     onAssistantStart: () => {
       clearTimers();
     },
     onAssistantDone: () => {
-      if (state !== "ST_Closing" && silencePromptsEnabled && !waitingForCommit) {
+      if (state !== "ST_Closing" && config.silenceAutoPromptEnabled && !waitingForCommit) {
         startSilenceTimer();
       }
     },
