@@ -471,6 +471,10 @@ wss.on("connection", (ws: WebSocket) => {
         sessionCreatedLogged = true;
         console.log(`${logPrefix(wsId)} session.created payload`, JSON.stringify(payload, null, 2));
       }
+      if (payload.type === "session.updated") {
+        // Ensure greeting is sent after session is fully configured.
+        maybeStartConversation();
+      }
       if (payload.type === "response.output_audio.delta" || payload.type === "response.audio.delta") {
         const delta = payload.delta as string | undefined;
         if (delta) {
