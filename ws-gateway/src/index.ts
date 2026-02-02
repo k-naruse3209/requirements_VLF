@@ -349,6 +349,9 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const logClient = createLogClient();
+  if (!logClient) {
+    console.warn(`${logPrefix(wsId)} log client disabled (LOG_API_BASE_URL not set)`);
+  }
 
   const createResponse = (instructions?: string) => {
     if (!instructions) return;
@@ -474,7 +477,14 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} ${message}`, data ?? "");
     },
     onInquiryUpdate: (payload) => {
-      if (!logClient || !callLogId) return;
+      if (!logClient) {
+        console.warn(`${logPrefix(wsId)} inquiry.skip no log client`, payload);
+        return;
+      }
+      if (!callLogId) {
+        console.warn(`${logPrefix(wsId)} inquiry.skip no callLogId`, payload);
+        return;
+      }
       logClient.upsertInquiry({
         call_id: callLogId,
         brand: payload.brand,
@@ -483,6 +493,7 @@ wss.on("connection", (ws: WebSocket) => {
         delivery_date: payload.deliveryDate,
         note: payload.note,
       });
+      console.log(`${logPrefix(wsId)} inquiry.upsert`, payload);
     },
   });
 
@@ -730,7 +741,12 @@ wss.on("connection", (ws: WebSocket) => {
           };
           logClient.createCall(payload).then((res) => {
             const id = res?.data?.id || res?.data?.attributes?.id;
-            if (id) callLogId = String(id);
+            if (id) {
+              callLogId = String(id);
+              console.log(`${logPrefix(wsId)} callLogId set`, callLogId);
+            } else {
+              console.warn(`${logPrefix(wsId)} callLogId missing in response`, res);
+            }
           });
         }
         if (config.testTwilioTone && !testToneSent) {
