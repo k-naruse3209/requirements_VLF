@@ -192,6 +192,8 @@ const backchannelPattern = /(はい|ええ|うん|うーん|えっと|あの|う
 const shouldIgnoreTranscript = (text: string) => {
   const normalized = text.trim();
   if (!normalized) return true;
+  if (extractWeightKg(normalized) != null) return false;
+  if (extractRiceBrand(normalized)) return false;
   if (punctuationOnlyPattern.test(normalized)) return true;
   if (normalized.length < 2) return true;
   if (!japaneseCharPattern.test(normalized) && normalized.length < 4) return true;
