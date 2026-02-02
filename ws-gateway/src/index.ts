@@ -295,6 +295,10 @@ wss.on("connection", (ws: WebSocket) => {
   const validateSession = (payload: RealtimeEvent) => {
     const session = (payload as { session?: Record<string, unknown> }).session;
     if (!session) return;
+    if (payload.type === "session.created") {
+      // Allow defaults on created; enforce on session.updated after our update applies.
+      return;
+    }
     if (useAudioSchema) {
       const audio = session.audio as
         | {
