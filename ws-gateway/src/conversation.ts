@@ -109,13 +109,18 @@ const riceBrandDictionary: Record<string, string[]> = {
   ななつぼし: ["ななつぼし", "七つ星", "ななつ"],
 };
 
-export const extractRiceBrand = (text: string) => {
+const normalizeBrandText = (text: string) => {
   const normalized = normalizeRiceText(text);
+  return normalized.replace(/[0-9a-z]/gi, "");
+};
+
+export const extractRiceBrand = (text: string) => {
+  const normalized = normalizeBrandText(text);
   let best: string | null = null;
   let bestLength = 0;
   for (const [canonical, variants] of Object.entries(riceBrandDictionary)) {
     for (const variant of variants) {
-      const key = normalizeRiceText(variant);
+      const key = normalizeBrandText(variant);
       if (!key) continue;
       if (normalized.includes(key) && key.length > bestLength) {
         best = canonical;
