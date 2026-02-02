@@ -49,6 +49,21 @@ CREATE TABLE IF NOT EXISTS utterances (
 CREATE INDEX IF NOT EXISTS idx_utterances_call_id ON utterances(call_id);
 CREATE INDEX IF NOT EXISTS idx_utterances_created_at ON utterances(created_at);
 
+CREATE TABLE IF NOT EXISTS rice_inquiries (
+  id TEXT PRIMARY KEY,
+  call_id TEXT NOT NULL UNIQUE,
+  brand TEXT,
+  weight_kg REAL,
+  delivery_address TEXT,
+  delivery_date TEXT,
+  note TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (call_id) REFERENCES calls(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rice_inquiries_call_id ON rice_inquiries(call_id);
+
 CREATE TABLE IF NOT EXISTS transcripts (
   id TEXT PRIMARY KEY,
   call_id TEXT NOT NULL,

@@ -51,6 +51,9 @@ type ConversationContext = {
   currency?: string;
   deliveryDate?: string;
   address?: string;
+  riceBrand?: string;
+  riceWeightKg?: number;
+  riceNote?: string;
   addressConfirmed: boolean;
   awaitingAddressConfirm: boolean;
   awaitingCategoryConfirm: boolean;
@@ -66,6 +69,13 @@ type ConversationContext = {
 
 type PromptHandler = (message: string) => void;
 type LogHandler = (message: string, data?: unknown) => void;
+type InquiryUpdateHandler = (payload: {
+  brand?: string;
+  weightKg?: number;
+  deliveryAddress?: string;
+  deliveryDate?: string;
+  note?: string;
+}) => void;
 
 const yesPattern = /(はい|お願いします|そうです|大丈夫|いいですよ|よろしい)/;
 const noPattern = /(いいえ|いえ|違う|やめ|キャンセル|不要|結構)/;
@@ -77,6 +87,16 @@ const isYes = (text: string) => yesPattern.test(text);
 const isNo = (text: string) => noPattern.test(text);
 
 const normalizeText = (text: string) => text.trim();
+
+const extractWeightKg = (text: string) => {
+  const match = text.match(/(\d+(?:\.\d+)?)\s*(?:kg|ｋｇ|KG|Kg|キロ|公斤)/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) ? value : null;
+};
+
+const stripWeightPart = (text: string) =>
+  text.replace(/(\d+(?:\.\d+)?)\s*(?:kg|ｋｇ|KG|Kg|キロ|公斤)/g, "").trim();
 
 const shouldIgnoreTranscript = (text: string) => {
   const normalized = text.trim();
@@ -104,12 +124,14 @@ export const createConversationController = ({
   config,
   onPrompt,
   onLog,
+  onInquiryUpdate,
 }: {
   catalog: Product[];
   toolClient: ToolClient;
   config: ConversationConfig;
   onPrompt: PromptHandler;
   onLog: LogHandler;
+  onInquiryUpdate: InquiryUpdateHandler;
 }) => {
   let state: ConversationState = "ST_Greeting";
   let lastInteractiveState: ConversationState = "ST_Greeting";
@@ -264,6 +286,13 @@ export const createConversationController = ({
         try {
           const delivery = await toolClient.getDeliveryDate(context.product.id, context.address);
           context.deliveryDate = delivery.deliveryDate;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
         } catch (err) {
           onLog("getDeliveryDate failed", err);
           context.closingReason = "error";
@@ -367,6 +396,22 @@ export const createConversationController = ({
 
     resetRetries();
 
+    const weightKg = extractWeightKg(normalized);
+    if (weightKg != null) {
+      context.riceWeightKg = weightKg;
+    }
+    const possibleBrand = stripWeightPart(normalized);
+    if (possibleBrand) {
+      context.riceBrand = possibleBrand;
+    }
+    onInquiryUpdate({
+      brand: context.riceBrand,
+      weightKg: context.riceWeightKg,
+      deliveryAddress: context.address,
+      deliveryDate: context.deliveryDate,
+      note: context.riceNote,
+    });
+
     if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
       context.product = undefined;
       context.price = undefined;
@@ -444,6 +489,13 @@ export const createConversationController = ({
         if (isYes(normalized)) {
           context.addressConfirmed = true;
           context.awaitingAddressConfirm = false;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
           return enterState("ST_DeliveryCheck");
         }
         if (isNo(normalized)) {
@@ -460,6 +512,13 @@ export const createConversationController = ({
       } else if (!context.address) {
         context.address = normalized;
         context.awaitingAddressConfirm = true;
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
         onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
         startSilenceTimer();
         return;
@@ -484,6 +543,13 @@ export const createConversationController = ({
     if (state === "ST_OrderConfirmation") {
       if (!context.customerPhone) {
         context.customerPhone = normalized;
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
         return enterState("ST_OrderConfirmation");
       }
       if (isYes(normalized)) {

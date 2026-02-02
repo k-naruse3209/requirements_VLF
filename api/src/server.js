@@ -74,6 +74,12 @@ const mapCallSchedule = (row) => ({
   },
 });
 
+const mapRiceInquiry = (row) => ({
+  id: String(row.id),
+  type: "rice_inquiry",
+  attributes: row,
+});
+
 const mapNote = (row) => ({
   id: String(row.id),
   type: "note",
@@ -95,6 +101,8 @@ const accessTtlMinutes = Number(process.env.ACCESS_TTL_MINUTES || "15");
 const refreshTtlDays = Number(process.env.REFRESH_TTL_DAYS || "30");
 
 const hashToken = (token) => crypto.createHash("sha256").update(token).digest("hex");
+const randomContactKey = () =>
+  `unknown-${crypto.randomUUID ? crypto.randomUUID() : crypto.randomBytes(8).toString("hex")}`;
 
 const signAccessToken = (payload) =>
   jwt.sign(payload, jwtSecret, { expiresIn: `${accessTtlMinutes}m` });
@@ -253,8 +261,34 @@ app.get("/api/v1/call_logs", requireAuth, (req, res) => {
 });
 
 app.post("/api/v1/call_logs", (req, res) => {
+  const payload = req.body || {};
+  let customerId = payload.customer_id;
+  if (!customerId) {
+    const phone = payload.from_number || payload.to_number || payload.provider_call_sid;
+    if (phone) {
+      const existing = repos.contacts.findByPhone(phone);
+      if (existing) {
+        customerId = existing.id;
+      } else {
+        customerId = repos.contacts.create({
+          name: "Guest",
+          phoneNumber: phone,
+          address: null,
+          description: "auto-created",
+        });
+      }
+    }
+  }
+  if (!customerId) {
+    customerId = repos.contacts.create({
+      name: "Guest",
+      phoneNumber: randomContactKey(),
+      address: null,
+      description: "auto-created",
+    });
+  }
   const id = repos.calls.create({
-    customerId: req.body.customer_id,
+    customerId,
     startedAt: req.body.started_at,
     fromNumber: req.body.from_number,
     toNumber: req.body.to_number,
@@ -305,6 +339,24 @@ app.post("/api/v1/call_logs/:id/messages", (req, res) => {
     endedAt: req.body.ended_at,
   });
   res.status(201).json({ success: true, data: { id } });
+});
+
+app.post("/api/v1/rice_inquiries", (req, res) => {
+  const payload = req.body || {};
+  if (!payload.call_id) {
+    res.status(400).json({ error: "call_id_required" });
+    return;
+  }
+  const id = repos.riceInquiries.upsert({
+    callId: payload.call_id,
+    brand: payload.brand,
+    weightKg: payload.weight_kg,
+    deliveryAddress: payload.delivery_address,
+    deliveryDate: payload.delivery_date,
+    note: payload.note,
+  });
+  const row = repos.riceInquiries.findByCallId(payload.call_id);
+  res.status(201).json({ success: true, data: row ? mapRiceInquiry(row) : { id } });
 });
 
 app.get("/api/v1/call_logs/:id/notes", requireAuth, (req, res) => {

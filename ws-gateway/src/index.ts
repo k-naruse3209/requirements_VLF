@@ -168,6 +168,36 @@ const toolClient = createToolClient({
   orderTimeoutMs: config.toolOrderTimeoutMs,
 });
 
+const createLogClient = () => {
+  if (!config.logApiBaseUrl) return null;
+  const timeoutMs = config.logApiTimeoutMs;
+  const request = async (path: string, payload: object, method = "POST") => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${config.logApiBaseUrl}${path}`, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      return res.ok ? await res.json() : null;
+    } catch (err) {
+      console.error("[log] request failed", path, err);
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+  return {
+    createCall: (payload: object) => request("/api/v1/call_logs", payload),
+    updateCall: (id: string, payload: object) => request(`/api/v1/call_logs/${id}`, payload, "PUT"),
+    appendMessage: (id: string, payload: object) =>
+      request(`/api/v1/call_logs/${id}/messages`, payload),
+    upsertInquiry: (payload: object) => request("/api/v1/rice_inquiries", payload),
+  };
+};
+
 const createRealtimeSocket = () => {
   if (!config.openaiApiKey) return null;
   const url = `${config.realtimeUrl}?model=${encodeURIComponent(config.realtimeModel)}`;
@@ -200,6 +230,8 @@ wss.on("connection", (ws: WebSocket) => {
   let queuedPrompt: string | null = null;
   let conversationStarted = false;
   let stopReceived = false;
+  let callLogId: string | null = null;
+  let callLogEnded = false;
   const useAudioSchema = config.realtimeSchema === "audio";
   const outputSampleRate = config.realtimeAudioRate;
   const resampleFactor = Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
@@ -217,6 +249,8 @@ wss.on("connection", (ws: WebSocket) => {
   const logOutgoing = (label: string, payload: object) => {
     console.log(`${logPrefix(wsId)} realtime send ${label}`, JSON.stringify(payload));
   };
+
+  const logClient = createLogClient();
 
   const createResponse = (instructions?: string) => {
     if (!instructions) return;
@@ -250,6 +284,14 @@ wss.on("connection", (ws: WebSocket) => {
     logOutgoing("response.create", payload);
     responsePending = true;
     sendToRealtime(payload);
+    if (logClient && callLogId) {
+      logClient.appendMessage(callLogId, {
+        role: "assistant",
+        content: instructions,
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+      });
+    }
   };
 
   const processCommittedTurn = () => {
@@ -265,6 +307,14 @@ wss.on("connection", (ws: WebSocket) => {
     if (responseActive || responsePending) {
       console.log(`${logPrefix(wsId)} skip transcript (assistant speaking)`, transcript.text);
       return;
+    }
+    if (logClient && callLogId) {
+      logClient.appendMessage(callLogId, {
+        role: "user",
+        content: transcript.text,
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+      });
     }
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
@@ -321,6 +371,17 @@ wss.on("connection", (ws: WebSocket) => {
     },
     onLog: (message, data) => {
       console.log(`${logPrefix(wsId)} ${message}`, data ?? "");
+    },
+    onInquiryUpdate: (payload) => {
+      if (!logClient || !callLogId) return;
+      logClient.upsertInquiry({
+        call_id: callLogId,
+        brand: payload.brand,
+        weight_kg: payload.weightKg,
+        delivery_address: payload.deliveryAddress,
+        delivery_date: payload.deliveryDate,
+        note: payload.note,
+      });
     },
   });
 
@@ -525,6 +586,23 @@ wss.on("connection", (ws: WebSocket) => {
           conversation.setCustomerPhone(customerPhone);
           conversation.setAddress(address);
         }
+        if (logClient && !callLogId) {
+          const nowIso = new Date().toISOString();
+          const payload = {
+            customer_id: null,
+            started_at: nowIso,
+            from_number: event.start.customParameters?.customer_phone || event.start.callSid,
+            to_number: null,
+            call_type: "inbound",
+            status: "in-progress",
+            provider: "twilio",
+            provider_call_sid: event.start.callSid,
+          };
+          logClient.createCall(payload).then((res) => {
+            const id = res?.data?.id || res?.data?.attributes?.id;
+            if (id) callLogId = String(id);
+          });
+        }
         maybeStartConversation();
         break;
       case "media":
@@ -563,6 +641,14 @@ wss.on("connection", (ws: WebSocket) => {
           audioFrameCount = 0;
           bufferedSamples = 0;
         }
+        if (logClient && callLogId && !callLogEnded) {
+          callLogEnded = true;
+          logClient.updateCall(callLogId, {
+            ended_at: new Date().toISOString(),
+            duration_sec: null,
+            status: "completed",
+          });
+        }
         break;
       default:
         break;
@@ -577,6 +663,14 @@ wss.on("connection", (ws: WebSocket) => {
       closedBy: "peer",
       closedAtMs: Date.now(),
     });
+    if (logClient && callLogId && !callLogEnded) {
+      callLogEnded = true;
+      logClient.updateCall(callLogId, {
+        ended_at: new Date().toISOString(),
+        duration_sec: null,
+        status: stopReceived ? "completed" : "ended",
+      });
+    }
   });
 
   ws.on("error", (err) => {

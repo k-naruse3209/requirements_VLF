@@ -121,6 +121,7 @@ export const createRepositories = (db) => {
       db.transaction(() => {
         db.prepare("DELETE FROM utterances WHERE call_id = ?").run(id);
         db.prepare("DELETE FROM transcripts WHERE call_id = ?").run(id);
+        db.prepare("DELETE FROM rice_inquiries WHERE call_id = ?").run(id);
         db.prepare("DELETE FROM notes WHERE call_id = ?").run(id);
         db.prepare("DELETE FROM call_tags WHERE call_id = ?").run(id);
         db.prepare("DELETE FROM calls WHERE id = ?").run(id);
@@ -149,6 +150,48 @@ export const createRepositories = (db) => {
     },
     listByCallId: (callId) =>
       db.prepare("SELECT * FROM utterances WHERE call_id = ? ORDER BY created_at ASC").all(callId),
+  };
+
+  const riceInquiries = {
+    upsert: (input) => {
+      const now = toIso();
+      const existing = db.prepare("SELECT id FROM rice_inquiries WHERE call_id = ?").get(input.callId);
+      if (existing) {
+        db.prepare(
+          `UPDATE rice_inquiries
+           SET brand = ?, weight_kg = ?, delivery_address = ?, delivery_date = ?, note = ?, updated_at = ?
+           WHERE call_id = ?`
+        ).run(
+          input.brand ?? null,
+          input.weightKg ?? null,
+          input.deliveryAddress ?? null,
+          input.deliveryDate ?? null,
+          input.note ?? null,
+          now,
+          input.callId
+        );
+        return existing.id;
+      }
+      const id = ulid();
+      db.prepare(
+        `INSERT INTO rice_inquiries
+         (id, call_id, brand, weight_kg, delivery_address, delivery_date, note, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        id,
+        input.callId,
+        input.brand ?? null,
+        input.weightKg ?? null,
+        input.deliveryAddress ?? null,
+        input.deliveryDate ?? null,
+        input.note ?? null,
+        now,
+        now
+      );
+      return id;
+    },
+    findByCallId: (callId) =>
+      db.prepare("SELECT * FROM rice_inquiries WHERE call_id = ?").get(callId),
   };
 
   const transcripts = {
@@ -400,6 +443,7 @@ export const createRepositories = (db) => {
   return {
     calls,
     utterances,
+    riceInquiries,
     transcripts,
     notes,
     tags,
