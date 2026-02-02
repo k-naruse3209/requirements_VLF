@@ -512,6 +512,16 @@ export const createConversationController = ({
     }
 
     if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
+      if (brandCandidate) {
+        context.riceBrand = brandCandidate;
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
+      }
       onLog("weight.invalid", { value: weightCandidate });
       onPrompt("量は1〜50kgの範囲で教えてください。");
       startSilenceTimer();
