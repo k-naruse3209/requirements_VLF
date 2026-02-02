@@ -328,11 +328,16 @@ wss.on("connection", (ws: WebSocket) => {
     }
     const input = session.input_audio_format;
     const output = session.output_audio_format;
-    const ok = input === expectedInputFormat.type && output === expectedOutputFormat.type;
+    const transcriptionModel = (session.input_audio_transcription as { model?: string } | undefined)?.model;
+    const ok =
+      input === expectedInputFormat.type &&
+      output === expectedOutputFormat.type &&
+      transcriptionModel === config.realtimeTranscriptionModel;
     console.log(`${logPrefix(wsId)} session.validation`, {
       ok,
       input,
       output,
+      transcriptionModel,
     });
     if (!ok) {
       failFast("flat schema mismatch", { expectedInputFormat, expectedOutputFormat });
@@ -531,21 +536,22 @@ wss.on("connection", (ws: WebSocket) => {
             },
           }
         : {
-            type: "session.update",
-            session: {
-              instructions: config.realtimeInstructions,
-              input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
-              output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
-              voice: "alloy",
-              modalities: ["audio", "text"],
-              turn_detection: {
-                type: "server_vad",
-                silence_duration_ms: 800,
-                create_response: false,
-                interrupt_response: true,
-              },
+          type: "session.update",
+          session: {
+            instructions: config.realtimeInstructions,
+            input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
+            output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
+            voice: "alloy",
+            modalities: ["audio", "text"],
+            input_audio_transcription: { model: config.realtimeTranscriptionModel },
+            turn_detection: {
+              type: "server_vad",
+              silence_duration_ms: 800,
+              create_response: false,
+              interrupt_response: true,
             },
-          };
+          },
+        };
       logOutgoing("session.update", payload);
       sendToRealtime(payload);
       console.log(`${logPrefix(wsId)} realtime connected`);
