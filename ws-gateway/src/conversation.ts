@@ -57,6 +57,7 @@ type ConversationContext = {
   addressConfirmed: boolean;
   awaitingAddressConfirm: boolean;
   awaitingCategoryConfirm: boolean;
+  awaitingBrandConfirm: boolean;
   customerPhone?: string;
   orderId?: string;
   suggestedProductIds: string[];
@@ -114,10 +115,56 @@ const normalizeBrandText = (text: string) => {
   return normalized.replace(/[0-9a-z]/gi, "");
 };
 
+const levenshtein = (a: string, b: string) => {
+  if (a === b) return 0;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) return bLen;
+  if (bLen === 0) return aLen;
+  const dp = Array.from({ length: aLen + 1 }, () => new Array(bLen + 1).fill(0));
+  for (let i = 0; i <= aLen; i += 1) dp[i][0] = i;
+  for (let j = 0; j <= bLen; j += 1) dp[0][j] = j;
+  for (let i = 1; i <= aLen; i += 1) {
+    for (let j = 1; j <= bLen; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return dp[aLen][bLen];
+};
+
+const bestDistanceInText = (text: string, key: string) => {
+  if (!text || !key) return Number.POSITIVE_INFINITY;
+  if (text.includes(key)) return 0;
+  if (text.length <= key.length) return levenshtein(text, key);
+  let best = Number.POSITIVE_INFINITY;
+  for (let i = 0; i <= text.length - key.length; i += 1) {
+    const chunk = text.slice(i, i + key.length);
+    const dist = levenshtein(chunk, key);
+    if (dist < best) best = dist;
+    if (best === 1) break;
+  }
+  return best;
+};
+
+const isFuzzyAcceptable = (distance: number, keyLength: number) => {
+  if (distance === 0) return true;
+  if (keyLength <= 3) return distance <= 1;
+  if (keyLength <= 5) return distance <= 2;
+  if (keyLength <= 8) return distance <= 3;
+  return distance <= 4;
+};
+
 export const extractRiceBrand = (text: string) => {
   const normalized = normalizeBrandText(text);
   let best: string | null = null;
   let bestLength = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  let confidence: "exact" | "fuzzy" = "exact";
   for (const [canonical, variants] of Object.entries(riceBrandDictionary)) {
     for (const variant of variants) {
       const key = normalizeBrandText(variant);
@@ -125,10 +172,22 @@ export const extractRiceBrand = (text: string) => {
       if (normalized.includes(key) && key.length > bestLength) {
         best = canonical;
         bestLength = key.length;
+        bestDistance = 0;
+        confidence = "exact";
+        continue;
+      }
+      const distance = bestDistanceInText(normalized, key);
+      if (distance > 0 && isFuzzyAcceptable(distance, key.length)) {
+        if (best == null || distance < bestDistance) {
+          best = canonical;
+          bestLength = key.length;
+          bestDistance = distance;
+          confidence = "fuzzy";
+        }
       }
     }
   }
-  return best;
+  return best ? { brand: best, confidence } : null;
 };
 
 const kanjiMap: Record<string, number> = {
@@ -242,6 +301,7 @@ export const createConversationController = ({
     addressConfirmed: false,
     awaitingAddressConfirm: false,
     awaitingCategoryConfirm: false,
+    awaitingBrandConfirm: false,
   };
 
   const clearTimers = () => {
@@ -515,7 +575,8 @@ export const createConversationController = ({
 
     if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
       if (brandCandidate) {
-        context.riceBrand = brandCandidate;
+        context.riceBrand = brandCandidate.brand;
+        context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -531,7 +592,8 @@ export const createConversationController = ({
     }
 
     if (brandCandidate) {
-      context.riceBrand = brandCandidate;
+      context.riceBrand = brandCandidate.brand;
+      context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
     }
     if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
       context.riceWeightKg = weightCandidate;
@@ -557,6 +619,7 @@ export const createConversationController = ({
       context.awaitingCategoryConfirm = false;
       context.riceBrand = undefined;
       context.riceWeightKg = undefined;
+      context.awaitingBrandConfirm = false;
       context.suggestedProductIds = [];
       context.deliveryRetries = 0;
       context.orderRetries = 0;
@@ -566,6 +629,11 @@ export const createConversationController = ({
     if (state === "ST_Greeting") {
       if (greetingPattern.test(normalized)) {
         onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
+        startSilenceTimer();
+        return;
+      }
+      if (context.awaitingBrandConfirm && context.riceBrand) {
+        onPrompt(`「${context.riceBrand}」でよろしいですか？`);
         startSilenceTimer();
         return;
       }
@@ -581,6 +649,25 @@ export const createConversationController = ({
         onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
         startSilenceTimer();
         return;
+      }
+      if (context.awaitingBrandConfirm && context.riceBrand) {
+        if (isYes(normalized)) {
+          context.awaitingBrandConfirm = false;
+          if (context.riceWeightKg) {
+            context.category = context.riceBrand;
+            return enterState("ST_ProductSuggestion");
+          }
+          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+          startSilenceTimer();
+          return;
+        }
+        if (isNo(normalized)) {
+          context.riceBrand = undefined;
+          context.awaitingBrandConfirm = false;
+          onPrompt("承知いたしました。銘柄と量を教えてください。");
+          startSilenceTimer();
+          return;
+        }
       }
       if (context.riceBrand && context.riceWeightKg) {
         context.category = context.riceBrand;
