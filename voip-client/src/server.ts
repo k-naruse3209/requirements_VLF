@@ -20,6 +20,7 @@ const port = Number(process.env.PORT || 3001);
 const streamUrl = process.env.STREAM_URL || "";
 const streamStatusUrl = process.env.STREAM_STATUS_URL || "";
 const streamMode = process.env.STREAM_MODE || "connect";
+const twimlVariant = process.env.TWIML_VARIANT || "keepalive";
 
 const send = (res: http.ServerResponse, status: number, body: string, type = "text/plain") => {
   res.writeHead(status, { "Content-Type": type });
@@ -43,6 +44,34 @@ const parseFormBody = (body: string) => {
     result[key] = value;
   }
   return result;
+};
+
+const timelines = new Map();
+
+const updateTimeline = (callSid: string, patch: Record<string, unknown>) => {
+  if (!callSid) return;
+  const current = timelines.get(callSid) || { callSid };
+  const next = { ...current, ...patch };
+  timelines.set(callSid, next);
+  const { acceptAtMs, streamStartedAtMs, streamStoppedAtMs, disconnectAtMs } = next;
+  const summary = {
+    callSid,
+    manualHangup: next.manualHangup ?? null,
+    acceptAtMs: acceptAtMs ?? null,
+    streamStartedAtMs: streamStartedAtMs ?? null,
+    streamStoppedAtMs: streamStoppedAtMs ?? null,
+    disconnectAtMs: disconnectAtMs ?? null,
+  };
+  if (acceptAtMs && streamStartedAtMs) {
+    summary.streamStartAfterMs = streamStartedAtMs - acceptAtMs;
+  }
+  if (acceptAtMs && streamStoppedAtMs) {
+    summary.streamStopAfterMs = streamStoppedAtMs - acceptAtMs;
+  }
+  if (acceptAtMs && disconnectAtMs) {
+    summary.disconnectAfterMs = disconnectAtMs - acceptAtMs;
+  }
+  console.log("Call timeline", summary);
 };
 
 const twilioClient = accountSid && apiKeySid && apiKeySecret
@@ -94,6 +123,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://localhost:${port}`);
     const mode = url.searchParams.get("mode") || streamMode;
     const statusCallback = streamStatusUrl || "";
+    const variant = url.searchParams.get("variant") || twimlVariant;
     const streamParams = `
     <Parameter name="client_id" value="${clientId}" />
     <Parameter name="stream_mode" value="${mode}" />`;
@@ -102,6 +132,10 @@ const server = http.createServer(async (req, res) => {
     </Stream>`
       : `<Stream url="${streamUrl}">${streamParams}
     </Stream>`;
+    const postConnectSay =
+      variant === "fallback" && mode === "connect"
+        ? `<Say language="ja-JP">stream disconnected</Say>`
+        : "";
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   ${mode === "start"
@@ -111,23 +145,52 @@ const server = http.createServer(async (req, res) => {
     : `<Connect>
     ${streamTag}
   </Connect>`}
-  <Say language="ja-JP">テスト通話を開始します。</Say>
-  <Pause length="60" />
+  ${postConnectSay}
+  <Pause length="600" />
 </Response>`;
     return send(res, 200, twiml, "text/xml; charset=utf-8");
   }
   if (req.url === "/twilio/stream-status" && req.method === "POST") {
     const raw = await readBody(req);
     const data = parseFormBody(raw);
-    console.log("Stream status callback", data);
+    const nowMs = Date.now();
+    console.log("Stream status callback", { ...data, nowMs });
+    if (data.CallSid) {
+      const patch: Record<string, unknown> = {};
+      if (data.StreamEvent === "stream-started") {
+        patch.streamStartedAtMs = nowMs;
+      }
+      if (data.StreamEvent === "stream-stopped") {
+        patch.streamStoppedAtMs = nowMs;
+      }
+      updateTimeline(data.CallSid, patch);
+    }
     return send(res, 204, "");
+  }
+  if (req.url === "/client-event" && req.method === "POST") {
+    const raw = await readBody(req);
+    let payload: { callSid?: string; event?: string; ts?: number; manualHangup?: boolean } = {};
+    try {
+      payload = JSON.parse(raw);
+    } catch {
+      return send(res, 400, "Invalid JSON");
+    }
+    const nowMs = typeof payload.ts === "number" ? payload.ts : Date.now();
+    console.log("Client event", { ...payload, nowMs });
+    if (payload.callSid) {
+      const patch: Record<string, unknown> = { manualHangup: payload.manualHangup ?? false };
+      if (payload.event === "accept") patch.acceptAtMs = nowMs;
+      if (payload.event === "disconnect") patch.disconnectAtMs = nowMs;
+      updateTimeline(payload.callSid, patch);
+    }
+    return send(res, 200, JSON.stringify({ ok: true }), "application/json");
   }
   if (req.url === "/call-status" && req.method === "POST") {
     if (!twilioClient) {
       return send(res, 500, "Missing Twilio env vars");
     }
     const raw = await readBody(req);
-    let payload: { callSid?: string; event?: string } = {};
+    let payload: { callSid?: string; event?: string; manualHangup?: boolean; ts?: number } = {};
     try {
       payload = JSON.parse(raw);
     } catch {
@@ -139,6 +202,8 @@ const server = http.createServer(async (req, res) => {
       console.log("Call status fetch", {
         event: payload.event,
         callSid: payload.callSid,
+        manualHangup: payload.manualHangup ?? false,
+        ts: payload.ts ?? null,
         status: call.status,
         errorCode: call.errorCode,
         direction: call.direction,

@@ -6,6 +6,7 @@ export const config = {
   testPrompt: process.env.TEST_PROMPT || "",
   realtimeBetaHeader: process.env.REALTIME_BETA_HEADER !== "0",
   realtimeSchema: process.env.REALTIME_SCHEMA || "flat",
+  realtimeAudioMode: process.env.REALTIME_AUDIO_MODE || "pcmu",
   realtimeAudioRate: Number(process.env.REALTIME_AUDIO_RATE || 24000),
   realtimeCommitFrames: Number(process.env.REALTIME_COMMIT_FRAMES || 50),
   realtimeTranscriptionModel: process.env.REALTIME_TRANSCRIPTION_MODEL || "",

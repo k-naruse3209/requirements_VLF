@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "smoke": "tsx scripts/realtime_smoke_test.ts",
+    "rice-test": "tsx scripts/rice_flow_test.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js"
   },

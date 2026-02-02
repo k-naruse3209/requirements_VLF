@@ -246,17 +246,93 @@ wss.on("connection", (ws: WebSocket) => {
   let callLogEnded = false;
   let testToneSent = false;
   const useAudioSchema = config.realtimeSchema === "audio";
-  const outputSampleRate = config.realtimeAudioRate;
-  const resampleFactor = Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
+  const audioMode = config.realtimeAudioMode === "pcm16" ? "pcm16" : "pcmu";
+  const outputSampleRate = audioMode === "pcmu" ? twilioSampleRate : config.realtimeAudioRate;
+  const resampleFactor =
+    audioMode === "pcmu" ? 1 : Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
   const minCommitSamples = Math.ceil(outputSampleRate / 10);
   const vadEnabled = true;
   let pendingTranscript: { text: string; confidence: number | null; ts: number } | null = null;
 
   console.log(`${logPrefix(wsId)} connected`);
+  console.log(`${logPrefix(wsId)} audio.pipeline`, {
+    twilioInput: `audio/pcmu@${twilioSampleRate}`,
+    realtimeInput:
+      useAudioSchema
+        ? `${audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm"}@${outputSampleRate}`
+        : audioMode === "pcmu"
+        ? "g711_ulaw"
+        : "pcm16",
+    realtimeOutput:
+      useAudioSchema
+        ? `${audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm"}@${outputSampleRate}`
+        : audioMode === "pcmu"
+        ? "g711_ulaw"
+        : "pcm16",
+    conversion: audioMode === "pcmu" ? "passthrough" : `pcmu->pcm16@${outputSampleRate}`,
+  });
 
   const sendToRealtime = (payload: object) => {
     if (!realtime || realtime.readyState !== WebSocket.OPEN) return;
     realtime.send(JSON.stringify(payload));
+  };
+
+  const expectedInputFormat = useAudioSchema
+    ? { type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm", rate: outputSampleRate }
+    : { type: audioMode === "pcmu" ? "g711_ulaw" : "pcm16", rate: null };
+  const expectedOutputFormat = useAudioSchema
+    ? { type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm", rate: outputSampleRate }
+    : { type: audioMode === "pcmu" ? "g711_ulaw" : "pcm16", rate: null };
+
+  const failFast = (reason: string, details?: unknown) => {
+    console.error(`${logPrefix(wsId)} session.validation.failed`, reason, details ?? "");
+    if (realtime && realtime.readyState === WebSocket.OPEN) {
+      realtime.close();
+    }
+    ws.close();
+  };
+
+  const validateSession = (payload: RealtimeEvent) => {
+    const session = (payload as { session?: Record<string, unknown> }).session;
+    if (!session) return;
+    if (useAudioSchema) {
+      const audio = session.audio as
+        | {
+            input?: { format?: { type?: string; rate?: number }; transcription?: { model?: string } };
+            output?: { format?: { type?: string; rate?: number } };
+          }
+        | undefined;
+      const input = audio?.input?.format;
+      const output = audio?.output?.format;
+      const transcriptionModel = audio?.input?.transcription?.model;
+      const ok =
+        input?.type === expectedInputFormat.type &&
+        input?.rate === expectedInputFormat.rate &&
+        output?.type === expectedOutputFormat.type &&
+        output?.rate === expectedOutputFormat.rate &&
+        transcriptionModel === config.realtimeTranscriptionModel;
+      console.log(`${logPrefix(wsId)} session.validation`, {
+        ok,
+        input,
+        output,
+        transcriptionModel,
+      });
+      if (!ok) {
+        failFast("audio schema mismatch", { expectedInputFormat, expectedOutputFormat, transcriptionModel });
+      }
+      return;
+    }
+    const input = session.input_audio_format;
+    const output = session.output_audio_format;
+    const ok = input === expectedInputFormat.type && output === expectedOutputFormat.type;
+    console.log(`${logPrefix(wsId)} session.validation`, {
+      ok,
+      input,
+      output,
+    });
+    if (!ok) {
+      failFast("flat schema mismatch", { expectedInputFormat, expectedOutputFormat });
+    }
   };
 
   const logOutgoing = (label: string, payload: object) => {
@@ -278,7 +354,10 @@ wss.on("connection", (ws: WebSocket) => {
           response: {
             audio: {
               output: {
-                format: { type: "audio/pcm", rate: outputSampleRate },
+                format: {
+                  type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm",
+                  rate: outputSampleRate,
+                },
                 voice: "alloy",
               },
             },
@@ -289,7 +368,7 @@ wss.on("connection", (ws: WebSocket) => {
           type: "response.create",
           response: {
             modalities: ["audio", "text"],
-            output_audio_format: "pcm16",
+            output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
             ...(instructions ? { instructions } : {}),
           },
@@ -409,11 +488,18 @@ wss.on("connection", (ws: WebSocket) => {
   if (realtime) {
     realtime.on("open", () => {
       realtimeReady = true;
+      if (!config.realtimeTranscriptionModel) {
+        console.error(`${logPrefix(wsId)} missing REALTIME_TRANSCRIPTION_MODEL`);
+        realtime.close();
+        ws.close();
+        return;
+      }
       const inputAudio = {
-        format: { type: "audio/pcm", rate: outputSampleRate },
-        ...(config.realtimeTranscriptionModel
-          ? { transcription: { model: config.realtimeTranscriptionModel } }
-          : {}),
+        format: {
+          type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm",
+          rate: outputSampleRate,
+        },
+        transcription: { model: config.realtimeTranscriptionModel },
         turn_detection: {
           type: "server_vad",
           silence_duration_ms: 800,
@@ -429,7 +515,13 @@ wss.on("connection", (ws: WebSocket) => {
               instructions: config.realtimeInstructions,
               audio: {
                 input: inputAudio,
-                output: { format: { type: "audio/pcm", rate: outputSampleRate }, voice: "alloy" },
+                output: {
+                  format: {
+                    type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm",
+                    rate: outputSampleRate,
+                  },
+                  voice: "alloy",
+                },
               },
               output_modalities: ["audio"],
             },
@@ -438,8 +530,8 @@ wss.on("connection", (ws: WebSocket) => {
             type: "session.update",
             session: {
               instructions: config.realtimeInstructions,
-              input_audio_format: "pcm16",
-              output_audio_format: "pcm16",
+              input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
+              output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
               voice: "alloy",
               modalities: ["audio", "text"],
               turn_detection: {
@@ -483,8 +575,10 @@ wss.on("connection", (ws: WebSocket) => {
       if (payload.type === "session.created" && !sessionCreatedLogged) {
         sessionCreatedLogged = true;
         console.log(`${logPrefix(wsId)} session.created payload`, JSON.stringify(payload, null, 2));
+        validateSession(payload);
       }
       if (payload.type === "session.updated") {
+        validateSession(payload);
         // Ensure greeting is sent after session is fully configured.
         maybeStartConversation();
       }
@@ -492,12 +586,17 @@ wss.on("connection", (ws: WebSocket) => {
         const delta = payload.delta as string | undefined;
         if (delta) {
           if (useAudioSchema) {
-            const pcm = Buffer.from(delta, "base64");
-            const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
-            const downsampled = downsample(pcm16, resampleFactor);
-            const mulaw = encodePcm16ToPcmu(downsampled);
-            sendToTwilio(mulaw.toString("base64"));
-            console.log(`${logPrefix(wsId)} realtime audio delta bytes`, pcm.byteLength);
+            if (audioMode === "pcmu") {
+              sendToTwilio(delta);
+              console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
+            } else {
+              const pcm = Buffer.from(delta, "base64");
+              const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
+              const downsampled = downsample(pcm16, resampleFactor);
+              const mulaw = encodePcm16ToPcmu(downsampled);
+              sendToTwilio(mulaw.toString("base64"));
+              console.log(`${logPrefix(wsId)} realtime audio delta bytes`, pcm.byteLength);
+            }
           } else {
             sendToTwilio(delta);
             console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
@@ -509,11 +608,15 @@ wss.on("connection", (ws: WebSocket) => {
         const audio = payload.audio as string | undefined;
         if (audio) {
           if (useAudioSchema) {
-            const pcm = Buffer.from(audio, "base64");
-            const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
-            const downsampled = downsample(pcm16, resampleFactor);
-            const mulaw = encodePcm16ToPcmu(downsampled);
-            sendToTwilio(mulaw.toString("base64"));
+            if (audioMode === "pcmu") {
+              sendToTwilio(audio);
+            } else {
+              const pcm = Buffer.from(audio, "base64");
+              const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
+              const downsampled = downsample(pcm16, resampleFactor);
+              const mulaw = encodePcm16ToPcmu(downsampled);
+              sendToTwilio(mulaw.toString("base64"));
+            }
           } else {
             sendToTwilio(audio);
           }
@@ -635,22 +738,40 @@ wss.on("connection", (ws: WebSocket) => {
         }
         if (realtimeReady) {
           if (useAudioSchema) {
-            const pcmu = Buffer.from(event.media.payload, "base64");
-            const pcm16 = decodePcmuToPcm16(pcmu);
-            const upsampled = upsample(pcm16, resampleFactor);
-            const pcmBuffer = Buffer.from(upsampled.buffer);
-            sendToRealtime({ type: "input_audio_buffer.append", audio: pcmBuffer.toString("base64") });
-            if (!vadEnabled) {
-              audioFrameCount += 1;
-              bufferedSamples += upsampled.length;
-              if (audioFrameCount >= config.realtimeCommitFrames && bufferedSamples >= minCommitSamples) {
-                sendToRealtime({ type: "input_audio_buffer.commit" });
-                audioFrameCount = 0;
-                bufferedSamples = 0;
+            if (audioMode === "pcmu") {
+              sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
+            } else {
+              const pcmu = Buffer.from(event.media.payload, "base64");
+              const pcm16 = decodePcmuToPcm16(pcmu);
+              const upsampled = upsample(pcm16, resampleFactor);
+              const pcmBuffer = Buffer.from(upsampled.buffer);
+              sendToRealtime({
+                type: "input_audio_buffer.append",
+                audio: pcmBuffer.toString("base64"),
+              });
+              if (!vadEnabled) {
+                audioFrameCount += 1;
+                bufferedSamples += upsampled.length;
+                if (audioFrameCount >= config.realtimeCommitFrames && bufferedSamples >= minCommitSamples) {
+                  sendToRealtime({ type: "input_audio_buffer.commit" });
+                  audioFrameCount = 0;
+                  bufferedSamples = 0;
+                }
               }
             }
           } else {
-            sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
+            if (audioMode === "pcmu") {
+              sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
+            } else {
+              const pcmu = Buffer.from(event.media.payload, "base64");
+              const pcm16 = decodePcmuToPcm16(pcmu);
+              const upsampled = upsample(pcm16, resampleFactor);
+              const pcmBuffer = Buffer.from(upsampled.buffer);
+              sendToRealtime({
+                type: "input_audio_buffer.append",
+                audio: pcmBuffer.toString("base64"),
+              });
+            }
           }
           hasBufferedAudio = true;
         }
