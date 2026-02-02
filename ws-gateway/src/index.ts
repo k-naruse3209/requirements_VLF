@@ -107,6 +107,18 @@ const muLawEncodeSample = (sample: number) => {
   return (~(sign | (exponent << 4) | mantissa)) & 0xff;
 };
 
+const generateBeepPcmu = (frequencyHz: number, durationMs: number) => {
+  const sampleRate = 8000;
+  const totalSamples = Math.floor((durationMs / 1000) * sampleRate);
+  const buffer = Buffer.alloc(totalSamples);
+  for (let i = 0; i < totalSamples; i += 1) {
+    const t = i / sampleRate;
+    const sample = Math.round(Math.sin(2 * Math.PI * frequencyHz * t) * 12000);
+    buffer[i] = muLawEncodeSample(sample);
+  }
+  return buffer;
+};
+
 const decodePcmuToPcm16 = (input: Buffer) => {
   const output = new Int16Array(input.length);
   for (let i = 0; i < input.length; i += 1) {
@@ -232,6 +244,7 @@ wss.on("connection", (ws: WebSocket) => {
   let stopReceived = false;
   let callLogId: string | null = null;
   let callLogEnded = false;
+  let testToneSent = false;
   const useAudioSchema = config.realtimeSchema === "audio";
   const outputSampleRate = config.realtimeAudioRate;
   const resampleFactor = Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
@@ -606,6 +619,12 @@ wss.on("connection", (ws: WebSocket) => {
             const id = res?.data?.id || res?.data?.attributes?.id;
             if (id) callLogId = String(id);
           });
+        }
+        if (config.testTwilioTone && !testToneSent) {
+          const tone = generateBeepPcmu(440, 600);
+          sendToTwilio(tone.toString("base64"));
+          testToneSent = true;
+          console.log(`${logPrefix(wsId)} sent test tone`);
         }
         maybeStartConversation();
         break;

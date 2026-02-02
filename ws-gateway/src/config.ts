@@ -26,6 +26,7 @@ export const config = {
     .filter(Boolean),
   logApiBaseUrl: process.env.LOG_API_BASE_URL || "",
   logApiTimeoutMs: Number(process.env.LOG_API_TIMEOUT_MS || 3000),
+  testTwilioTone: process.env.TEST_TWILIO_TONE === "1",
   toolBaseUrl: process.env.TOOL_BASE_URL || "",
   toolStockTimeoutMs: Number(process.env.TOOL_STOCK_TIMEOUT_MS || 4000),
   toolPriceTimeoutMs: Number(process.env.TOOL_PRICE_TIMEOUT_MS || 4000),
