@@ -160,13 +160,15 @@ const parseKanjiNumber = (text: string) => {
 };
 
 export const extractWeightKg = (text: string) => {
-  const normalized = normalizeRiceText(text);
+  const normalized = text.normalize("NFKC").toLowerCase().replace(/\s+/g, "");
   const numeric = normalized.match(/(\d+(?:\.\d+)?)?(?:kg|ｋｇ|きろ|キロ|公斤)/);
   if (numeric && numeric[1]) {
     const value = Number(numeric[1]);
     return Number.isFinite(value) ? value : null;
   }
-  const kanji = normalized.match(/([一二三四五六七八九十零]+)(?:kg|ｋｇ|きろ|キロ|公斤)/);
+  const kanji = normalizeRiceText(text).match(
+    /([一二三四五六七八九十零]+)(?:kg|ｋｇ|きろ|キロ|公斤)/
+  );
   if (kanji) {
     const value = parseKanjiNumber(kanji[1]);
     return value ?? null;
