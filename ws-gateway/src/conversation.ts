@@ -550,6 +550,10 @@ export const createConversationController = ({
         startSilenceTimer();
         return;
       }
+      if (context.riceBrand && context.riceWeightKg) {
+        context.category = context.riceBrand;
+        return enterState("ST_ProductSuggestion");
+      }
       return enterState("ST_RequirementCheck");
     }
 
