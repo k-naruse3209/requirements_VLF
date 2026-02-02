@@ -329,6 +329,11 @@ app.get("/api/v1/call_logs/:id/messages", requireAuth, (req, res) => {
   });
 });
 
+app.get("/api/v1/call_logs/:id/rice_inquiry", requireAuth, (req, res) => {
+  const row = repos.riceInquiries.findByCallId(req.params.id);
+  res.json({ success: true, data: row ? mapRiceInquiry(row) : null });
+});
+
 app.post("/api/v1/call_logs/:id/messages", (req, res) => {
   const id = repos.utterances.create({
     callId: req.params.id,
