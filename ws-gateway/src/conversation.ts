@@ -112,7 +112,12 @@ const riceBrandDictionary: Record<string, string[]> = {
 
 const normalizeBrandText = (text: string) => {
   const normalized = normalizeRiceText(text);
-  return normalized.replace(/[0-9a-z]/gi, "");
+  return normalized
+    .replace(/[0-9a-z]/gi, "")
+    .replace(/(kg|ｋｇ|きろ|キロ|公斤)/g, "")
+    .replace(/[一二三四五六七八九十零]/g, "")
+    .replace(/(です|ください|おねがいします|お願いします|にしてください|でお願いします)/g, "")
+    .trim();
 };
 
 const levenshtein = (a: string, b: string) => {
