@@ -4,7 +4,7 @@
 - Complete the MVP spec in docs/ as the single source of truth.
 
 ## Allowed edits
-- docs/** only (unless explicitly permitted)
+- docs/**, .specify/**, voip-client/**, proxy/**, ws-gateway/**, api/**, db/** (spec kit + VoIP client + local proxy + ws gateway + API/DB)
 
 ## Required outputs
 - List contradictions, missing fields, and propose exact edits with file+section anchors.

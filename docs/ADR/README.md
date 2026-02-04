@@ -19,6 +19,10 @@ ADR（Architecture Decision Record）は、プロジェクトにおける重要�
 | ADR-002 | [EX_Silenceの無音閾値を初期値5秒にする](./2025-01-07-silence-threshold-initial-value-5-seconds.md) | Proposed | 2025-01-07 |
 | ADR-003 | [saveOrderのリトライ回数を1回にする](./2025-01-07-saveorder-retry-count-one-time.md) | Accepted | 2025-01-07 |
 | ADR-004 | [EX_Correctionのキーワードリストを5パターンにする](./2025-01-07-correction-keyword-list-five-patterns.md) | Accepted | 2025-01-07 |
+| ADR-005 | [SQLite for MVP storage](./0005-sqlite-mvp-schema.md) | Accepted | 2026-01-26 |
+| ADR-006 | [SQLite driver for MVP](./0006-sqlite-driver-better-sqlite3.md) | Accepted | 2026-01-26 |
+| ADR-007 | [API framework for MVP](./0007-api-framework-express.md) | Accepted | 2026-01-26 |
+| ADR-008 | [Admin auth scheme (JWT + refresh cookie)](./0008-admin-auth-jwt-refresh.md) | Accepted | 2026-01-26 |
 
 **ADRが必要になるケース**:
 - 状態遷移図への状態追加・削除

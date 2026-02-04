@@ -1,0 +1,12 @@
+{
+  "name": "vlf-local-proxy",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/index.js"
+  },
+  "dependencies": {
+    "http-proxy": "^1.18.1"
+  }
+}

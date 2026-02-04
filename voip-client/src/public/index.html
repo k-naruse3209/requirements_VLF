@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VLF VoIP Test</title>
+    <script src="/twilio.min.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 24px; }
+      button { margin-right: 8px; padding: 8px 12px; }
+      #log { white-space: pre-wrap; background: #f6f6f6; padding: 12px; }
+    </style>
+  </head>
+  <body>
+    <h1>VLF VoIP Test</h1>
+    <p>ブラウザからTwilio Voice SDKで発着信テストします。</p>
+    <div>
+      <button id="btn-init">Init</button>
+      <button id="btn-call">Call</button>
+      <button id="btn-hangup">Hangup</button>
+    </div>
+    <div>
+      <strong>CallSid:</strong> <span id="call-sid">-</span>
+    </div>
+    <h3>Log</h3>
+    <div id="log"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>

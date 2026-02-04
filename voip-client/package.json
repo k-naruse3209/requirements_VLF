@@ -1,0 +1,19 @@
+{
+  "name": "vlf-voip-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "@twilio/voice-sdk": "^2.10.0",
+    "dotenv": "^16.4.7",
+    "twilio": "^5.11.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
