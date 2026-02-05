@@ -53,12 +53,14 @@ type ConversationContext = {
   address?: string;
   riceBrand?: string;
   riceWeightKg?: number;
+  riceMilling?: "精米" | "玄米";
   riceNote?: string;
   addressConfirmed: boolean;
   awaitingAddressConfirm: boolean;
   awaitingCategoryConfirm: boolean;
   awaitingBrandConfirm: boolean;
   awaitingWeightChoice: boolean;
+  awaitingMillingChoice: boolean;
   brandConfirmed: boolean;
   customerPhone?: string;
   orderId?: string;
@@ -85,10 +87,19 @@ const noPattern = /(いいえ|いえ|違う|やめ|キャンセル|不要|結構
 const greetingPattern = /(もしもし|聞こえますか|聞こえてますか)/;
 const japaneseCharPattern = /[ぁ-んァ-ン一-龯]/;
 const punctuationOnlyPattern = /^[\s\p{P}\p{S}]+$/u;
+const seimaiPattern = /(精米|せいまい)/;
+const genmaiPattern = /(玄米|げんまい)/;
 
 const isYes = (text: string) => yesPattern.test(text);
 const isNo = (text: string) => noPattern.test(text);
 const isJapaneseLike = (text: string) => japaneseCharPattern.test(text);
+
+const extractMilling = (text: string): "精米" | "玄米" | null => {
+  const normalized = normalizeRiceText(text);
+  if (genmaiPattern.test(normalized)) return "玄米";
+  if (seimaiPattern.test(normalized)) return "精米";
+  return null;
+};
 
 const normalizeText = (text: string) => text.trim();
 
@@ -316,6 +327,7 @@ export const createConversationController = ({
     awaitingCategoryConfirm: false,
     awaitingBrandConfirm: false,
     awaitingWeightChoice: false,
+    awaitingMillingChoice: false,
     brandConfirmed: false,
   };
 
@@ -382,38 +394,19 @@ export const createConversationController = ({
         break;
       }
       case "ST_ProductSuggestion": {
-        const product = pickProduct(
-          catalog,
-          context.riceBrand ?? context.category,
-          context.suggestedProductIds
-        );
-        if (product) {
-          context.product = product;
-          context.suggestedProductIds.push(product.id);
-        } else {
-          // Fallback: present a virtual suggestion even if catalog is missing.
-          context.product = {
-            id: `virtual-${context.riceBrand ?? "rice"}-${context.riceWeightKg ?? "x"}`,
-            name: context.riceBrand && context.riceWeightKg
-              ? `${context.riceBrand} ${context.riceWeightKg}kg`
-              : "お米",
-            category: context.riceBrand ?? "rice",
-            description: "",
-            specs: "",
-            price: 0,
-          };
+        if (!context.riceBrand || !context.riceWeightKg) {
+          return enterState("ST_RequirementCheck");
         }
-        const selected = product ?? context.product;
-        const details = [selected?.description, selected?.specs].filter(Boolean).join(" ");
-        const detailText = details ? ` ${details}` : "";
-        const summary =
-          context.riceBrand && context.riceWeightKg
-            ? `「${context.riceBrand}」${context.riceWeightKg}kgで承りました。`
-            : "";
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
         onPrompt(
-          `${summary}${selected?.name ?? "お米"}はいかがでしょうか。${detailText}こちらでよろしいですか？`
+          `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。こちらで登録しました。`
         );
-        startSilenceTimer();
         break;
       }
       case "ST_StockCheck": {
@@ -612,111 +605,10 @@ export const createConversationController = ({
 
     const weightCandidate = extractWeightKg(normalized);
     const brandCandidate = extractRiceBrand(normalized);
-    const wasAwaitingBrandConfirm = context.awaitingBrandConfirm;
-    const wasAwaitingWeightChoice = context.awaitingWeightChoice;
-    const wasBrandConfirmed = context.brandConfirmed;
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
     if (!hasInfo && !isJapaneseLike(normalized)) {
       onLog("transcript.skip_non_japanese", { text: normalized });
       return;
-    }
-    if (!hasInfo) {
-      if (context.awaitingBrandConfirm && context.riceBrand) {
-        if (isYes(normalized)) {
-          context.awaitingBrandConfirm = false;
-          context.brandConfirmed = true;
-          context.riceWeightKg = undefined;
-          context.awaitingWeightChoice = true;
-          onPrompt(weightOptionsPrompt);
-          startSilenceTimer();
-          return;
-        }
-        if (isNo(normalized)) {
-          context.riceBrand = undefined;
-          context.brandConfirmed = false;
-          context.awaitingBrandConfirm = false;
-          onPrompt("承知いたしました。銘柄を教えてください。");
-          startSilenceTimer();
-          return;
-        }
-      }
-      if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
-        if (context.noHearRetries === 0) {
-          context.noHearRetries += 1;
-          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
-          startSilenceTimer();
-        } else {
-          onLog("transcript.noinfo", { text: normalized });
-        }
-        return;
-      }
-    }
-
-    if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
-      if (brandCandidate) {
-        context.riceBrand = brandCandidate.brand;
-        context.brandConfirmed = false;
-        context.awaitingBrandConfirm = true;
-        onInquiryUpdate({
-          brand: context.riceBrand,
-          weightKg: context.riceWeightKg,
-          deliveryAddress: context.address,
-          deliveryDate: context.deliveryDate,
-          note: context.riceNote,
-        });
-      }
-      onLog("weight.invalid", { value: weightCandidate });
-      onPrompt("量は1〜50kgの範囲で教えてください。");
-      startSilenceTimer();
-      return;
-    }
-
-    if (brandCandidate) {
-      if (context.riceBrand !== brandCandidate.brand) {
-        context.riceBrand = brandCandidate.brand;
-        context.brandConfirmed = false;
-        context.riceWeightKg = undefined;
-        context.awaitingWeightChoice = false;
-      }
-      context.awaitingBrandConfirm = true;
-    }
-    if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
-      if (context.awaitingWeightChoice || context.brandConfirmed) {
-        if (allowedRiceWeights.includes(weightCandidate)) {
-          context.riceWeightKg = weightCandidate;
-          context.awaitingWeightChoice = false;
-        }
-      }
-    }
-    if (context.riceBrand || context.riceWeightKg) {
-      onInquiryUpdate({
-        brand: context.riceBrand,
-        weightKg: context.riceWeightKg,
-        deliveryAddress: context.address,
-        deliveryDate: context.deliveryDate,
-        note: context.riceNote,
-      });
-    }
-
-    if (
-      context.riceBrand &&
-      weightCandidate != null &&
-      allowedRiceWeights.includes(weightCandidate) &&
-      (wasAwaitingBrandConfirm || wasAwaitingWeightChoice || wasBrandConfirmed)
-    ) {
-      context.awaitingBrandConfirm = false;
-      context.brandConfirmed = true;
-      context.awaitingWeightChoice = false;
-      context.riceWeightKg = weightCandidate;
-      context.category = context.riceBrand;
-      onInquiryUpdate({
-        brand: context.riceBrand,
-        weightKg: context.riceWeightKg,
-        deliveryAddress: context.address,
-        deliveryDate: context.deliveryDate,
-        note: context.riceNote,
-      });
-      return enterState("ST_ProductSuggestion");
     }
 
     if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
@@ -739,18 +631,14 @@ export const createConversationController = ({
       return enterState("ST_RequirementCheck");
     }
 
-    if (state === "ST_RequirementCheck") {
-      if (greetingPattern.test(normalized)) {
-        onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
-        startSilenceTimer();
-        return;
-      }
-      if (context.awaitingBrandConfirm && context.riceBrand) {
+    if (context.awaitingBrandConfirm && context.riceBrand) {
+      if (isYes(normalized)) {
+        context.awaitingBrandConfirm = false;
+        context.brandConfirmed = true;
+        context.awaitingWeightChoice = true;
         if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
-          context.awaitingBrandConfirm = false;
-          context.brandConfirmed = true;
-          context.awaitingWeightChoice = false;
           context.riceWeightKg = weightCandidate;
+          context.awaitingWeightChoice = false;
           context.category = context.riceBrand;
           onInquiryUpdate({
             brand: context.riceBrand,
@@ -761,60 +649,99 @@ export const createConversationController = ({
           });
           return enterState("ST_ProductSuggestion");
         }
-        if (isYes(normalized)) {
-          context.awaitingBrandConfirm = false;
-          context.brandConfirmed = true;
-          context.riceWeightKg = undefined;
-          context.awaitingWeightChoice = true;
-          onPrompt(weightOptionsPrompt);
-          startSilenceTimer();
-          return;
-        }
-        if (isNo(normalized)) {
-          context.riceBrand = undefined;
-          context.brandConfirmed = false;
-          context.awaitingBrandConfirm = false;
-          onPrompt("承知いたしました。銘柄を教えてください。");
-          startSilenceTimer();
-          return;
-        }
-      }
-      if (context.awaitingWeightChoice) {
-        if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
-          context.riceWeightKg = weightCandidate;
-          context.awaitingWeightChoice = false;
-          if (context.riceBrand) {
-            context.category = context.riceBrand;
-          }
-          onInquiryUpdate({
-            brand: context.riceBrand,
-            weightKg: context.riceWeightKg,
-            deliveryAddress: context.address,
-            deliveryDate: context.deliveryDate,
-            note: context.riceNote,
-          });
-          return enterState("ST_ProductSuggestion");
-        }
         onPrompt(weightOptionsPrompt);
         startSilenceTimer();
         return;
       }
-      if (context.brandConfirmed && context.riceBrand && context.riceWeightKg) {
+      if (isNo(normalized)) {
+        context.riceBrand = undefined;
+        context.brandConfirmed = false;
+        context.awaitingBrandConfirm = false;
+        onPrompt("承知いたしました。銘柄を教えてください。");
+        startSilenceTimer();
+        return;
+      }
+      if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
+        context.awaitingBrandConfirm = false;
+        context.brandConfirmed = true;
+        context.awaitingWeightChoice = false;
+        context.riceWeightKg = weightCandidate;
         context.category = context.riceBrand;
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
         return enterState("ST_ProductSuggestion");
       }
-      if (!context.riceBrand && context.riceWeightKg) {
-        onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
-        startSilenceTimer();
+      onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+      startSilenceTimer();
+      return;
+    }
+
+    if (context.awaitingWeightChoice) {
+      if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
+        context.riceWeightKg = weightCandidate;
+        context.awaitingWeightChoice = false;
+        if (context.riceBrand) {
+          context.category = context.riceBrand;
+        }
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
+        return enterState("ST_ProductSuggestion");
+      }
+      onPrompt(weightOptionsPrompt);
+      startSilenceTimer();
+      return;
+    }
+
+    if (brandCandidate) {
+      context.riceBrand = brandCandidate.brand;
+      context.brandConfirmed = false;
+      context.awaitingBrandConfirm = true;
+      context.riceWeightKg = undefined;
+      context.awaitingWeightChoice = false;
+      onInquiryUpdate({
+        brand: context.riceBrand,
+        weightKg: context.riceWeightKg,
+        deliveryAddress: context.address,
+        deliveryDate: context.deliveryDate,
+        note: context.riceNote,
+      });
+      onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+      startSilenceTimer();
+      return;
+    }
+
+    if (weightCandidate != null) {
+      onPrompt("銘柄を教えてください。");
+      startSilenceTimer();
+      return;
+    }
+
+    if (!hasInfo) {
+      if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
+        if (context.noHearRetries === 0) {
+          context.noHearRetries += 1;
+          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+          startSilenceTimer();
+        } else {
+          onLog("transcript.noinfo", { text: normalized });
+        }
         return;
       }
-      if (context.riceBrand && !context.brandConfirmed) {
-        onPrompt(`「${context.riceBrand}」でよろしいですか？`);
-        startSilenceTimer();
-        return;
-      }
-      if (context.riceBrand && context.brandConfirmed && !context.riceWeightKg) {
-        onPrompt(weightOptionsPrompt);
+    }
+
+    if (state === "ST_RequirementCheck") {
+      if (greetingPattern.test(normalized)) {
+        onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
         startSilenceTimer();
         return;
       }
@@ -824,13 +751,10 @@ export const createConversationController = ({
     }
 
     if (state === "ST_ProductSuggestion") {
-      if (isYes(normalized)) {
-        return enterState("ST_StockCheck");
-      }
-      if (isNo(normalized)) {
+      if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
         return enterState("ST_RequirementCheck");
       }
-      return enterState("ST_RequirementCheck");
+      return;
     }
 
     if (state === "ST_PriceQuote") {
