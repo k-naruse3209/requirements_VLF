@@ -172,6 +172,14 @@ const loadCatalog = (): Product[] => {
 };
 
 const productCatalog = loadCatalog();
+if (config.productCatalogPath) {
+  console.log("[catalog] loaded", {
+    count: productCatalog.length,
+    path: config.productCatalogPath,
+  });
+} else {
+  console.warn("[catalog] no PRODUCT_CATALOG_PATH configured");
+}
 const toolClient = createToolClient({
   baseUrl: config.toolBaseUrl,
   stockTimeoutMs: config.toolStockTimeoutMs,
@@ -245,6 +253,8 @@ wss.on("connection", (ws: WebSocket) => {
   let callLogId: string | null = null;
   let callLogEnded = false;
   let testToneSent = false;
+  let callSid = "";
+  let sessionId = "";
   const useAudioSchema = config.realtimeSchema === "audio";
   const audioMode = config.realtimeAudioMode === "pcm16" ? "pcm16" : "pcmu";
   const outputSampleRate = audioMode === "pcmu" ? twilioSampleRate : config.realtimeAudioRate;
@@ -258,7 +268,17 @@ wss.on("connection", (ws: WebSocket) => {
   let assistantTranscriptStartedAt: string | null = null;
   let lastAssistantPrompt = "";
   let lastAssistantDoneAt = 0;
+  let lastCommitAt = 0;
+  let awaitingTranscriptUntil = 0;
+  const transcriptWaitMs = 2000;
   const echoSuppressionMs = 800;
+  let bytesWindowStart = Date.now();
+  let bytesInWindow = 0;
+  let bytesInLastSecond = 0;
+  let lastInputEvent: { type: string; at: number; audioStartMs?: number; audioEndMs?: number } | null = null;
+  let lastTimeoutTriggeredAt = 0;
+  let responseSeq = 0;
+  const pendingResponseRequests = new Map<string, { ts: number; prompt: string }>();
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
@@ -354,6 +374,55 @@ wss.on("connection", (ws: WebSocket) => {
     console.log(`${logPrefix(wsId)} realtime send ${label}`, JSON.stringify(payload));
   };
 
+  const updateBytesWindow = (bytes: number) => {
+    const now = Date.now();
+    if (now - bytesWindowStart >= 1000) {
+      bytesInLastSecond = bytesInWindow;
+      bytesInWindow = 0;
+      bytesWindowStart = now;
+    }
+    bytesInWindow += bytes;
+  };
+
+  const logServerEvent = (payload: RealtimeEvent, extra?: Record<string, unknown>) => {
+    const responseId = (payload as { response_id?: string }).response_id;
+    const itemId =
+      (payload as { item_id?: string }).item_id ||
+      (payload as { item?: { id?: string } }).item?.id;
+    const audioStartMs = (payload as { audio_start_ms?: number }).audio_start_ms;
+    const audioEndMs = (payload as { audio_end_ms?: number }).audio_end_ms;
+    const reason =
+      (payload as { reason?: string }).reason ||
+      (payload as { error?: { code?: string; message?: string } }).error?.code ||
+      (payload as { error?: { message?: string } }).error?.message;
+    const eventLog = {
+      ts: new Date().toISOString(),
+      callSid,
+      sessionId,
+      type: payload.type,
+      responseId,
+      itemId,
+      audioStartMs,
+      audioEndMs,
+      streamBytesIn1s: bytesInLastSecond,
+      reason,
+      ...extra,
+    };
+    console.log(`${logPrefix(wsId)} event`, JSON.stringify(eventLog));
+  };
+
+  const loggableEvents = new Set([
+    "input_audio_buffer.speech_started",
+    "input_audio_buffer.speech_stopped",
+    "input_audio_buffer.committed",
+    "input_audio_buffer.timeout_triggered",
+    "conversation.item.created",
+    "conversation.item.input_audio_transcription.completed",
+    "response.created",
+    "response.done",
+    "error",
+  ]);
+
   const logClient = createLogClient();
   if (!logClient) {
     console.warn(`${logPrefix(wsId)} log client disabled (LOG_API_BASE_URL not set)`);
@@ -366,6 +435,7 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
+    const requestId = `gw_${Date.now()}_${++responseSeq}`;
     const payload = useAudioSchema
       ? {
           type: "response.create",
@@ -380,6 +450,7 @@ wss.on("connection", (ws: WebSocket) => {
               },
             },
             ...(instructions ? { instructions } : {}),
+            metadata: { client_request_id: requestId, source: "gateway" },
           },
         }
       : {
@@ -389,11 +460,13 @@ wss.on("connection", (ws: WebSocket) => {
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
             ...(instructions ? { instructions } : {}),
+            metadata: { client_request_id: requestId, source: "gateway" },
           },
         };
     logOutgoing("response.create", payload);
     responsePending = true;
     lastAssistantPrompt = instructions;
+    pendingResponseRequests.set(requestId, { ts: Date.now(), prompt: instructions });
     sendToRealtime(payload);
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
@@ -420,7 +493,8 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const processCommittedTurn = () => {
-    if (!commitPending) return;
+    const now = Date.now();
+    if (!commitPending && (!lastCommitAt || now > awaitingTranscriptUntil)) return;
     if (!pendingTranscript) return;
     const transcript = pendingTranscript;
     pendingTranscript = null;
@@ -472,6 +546,8 @@ wss.on("connection", (ws: WebSocket) => {
 
   const markCommitted = () => {
     commitPending = true;
+    lastCommitAt = Date.now();
+    awaitingTranscriptUntil = lastCommitAt + transcriptWaitMs;
     conversation.onUserCommitted();
     processCommittedTurn();
     if (!commitTimer) {
@@ -480,7 +556,7 @@ wss.on("connection", (ws: WebSocket) => {
         commitPending = false;
         commitTimer = null;
         console.log(`${logPrefix(wsId)} committed without transcript`);
-      }, 500);
+      }, transcriptWaitMs);
     }
   };
 
@@ -628,12 +704,36 @@ wss.on("connection", (ws: WebSocket) => {
       }
       const payload = safeJson(data.toString()) as RealtimeEvent | null;
       if (!payload) return;
+      if (payload.type?.startsWith("input_audio_buffer.")) {
+        const audioStartMs = (payload as { audio_start_ms?: number }).audio_start_ms;
+        const audioEndMs = (payload as { audio_end_ms?: number }).audio_end_ms;
+        lastInputEvent = {
+          type: payload.type,
+          at: Date.now(),
+          audioStartMs,
+          audioEndMs,
+        };
+        if (payload.type === "input_audio_buffer.timeout_triggered") {
+          lastTimeoutTriggeredAt = Date.now();
+        }
+        logServerEvent(payload);
+      }
+      if (payload.type === "conversation.item.created") {
+        logServerEvent(payload);
+      }
+      if (payload.type === "conversation.item.input_audio_transcription.completed") {
+        logServerEvent(payload);
+      }
       if (payload.type === "error") {
         console.error(`${logPrefix(wsId)} realtime error event`, payload);
         const error = (payload as { error?: { code?: string } }).error;
         if (error?.code === "conversation_already_has_active_response") {
           responsePending = false;
         }
+        logServerEvent(payload, {
+          lastInputEvent: lastInputEvent?.type,
+          lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
+        });
       }
       const userTranscript = extractUserTranscript(payload);
       if (userTranscript) {
@@ -642,6 +742,8 @@ wss.on("connection", (ws: WebSocket) => {
       }
       if (payload.type === "session.created" && !sessionCreatedLogged) {
         sessionCreatedLogged = true;
+        const createdSessionId = (payload as { session?: { id?: string } }).session?.id;
+        if (createdSessionId) sessionId = createdSessionId;
         console.log(`${logPrefix(wsId)} session.created payload`, JSON.stringify(payload, null, 2));
         validateSession(payload);
       }
@@ -726,12 +828,32 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} realtime event`, payload.type);
       }
       if (payload.type === "response.created") {
-        if (!responsePending && !responseActive) {
+        const response = (payload as { response?: { metadata?: Record<string, unknown> } }).response;
+        const clientRequestId = response?.metadata?.client_request_id as string | undefined;
+        const expected =
+          (clientRequestId && pendingResponseRequests.has(clientRequestId)) ||
+          responsePending ||
+          responseActive;
+        logServerEvent(payload, {
+          expected,
+          clientRequestId: clientRequestId || null,
+          lastInputEvent: lastInputEvent?.type,
+          lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
+          timeoutTriggeredMsAgo: lastTimeoutTriggeredAt
+            ? Date.now() - lastTimeoutTriggeredAt
+            : null,
+        });
+        if (clientRequestId) pendingResponseRequests.delete(clientRequestId);
+        if (!expected) {
           console.warn(`${logPrefix(wsId)} response.created (unexpected)`, {
             id: (payload as { response_id?: string }).response_id,
+            clientRequestId,
           });
           logOutgoing("response.cancel", { type: "response.cancel" });
           sendToRealtime({ type: "response.cancel" });
+          responseActive = false;
+          responsePending = false;
+          return;
         }
         responseActive = true;
         responsePending = false;
@@ -746,6 +868,10 @@ wss.on("connection", (ws: WebSocket) => {
         flushAssistantTranscript();
       }
       if (payload.type === "response.done") {
+        logServerEvent(payload, {
+          lastInputEvent: lastInputEvent?.type,
+          lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
+        });
         responseActive = false;
         responsePending = false;
         lastAssistantDoneAt = Date.now();
@@ -805,6 +931,7 @@ wss.on("connection", (ws: WebSocket) => {
     switch (event.event) {
       case "start":
         streamSid = event.start.streamSid;
+        callSid = event.start.callSid;
         console.log(`${logPrefix(wsId)} stream started`, event.start);
         if (event.start.customParameters) {
           const { customer_phone: customerPhone, address } = event.start.customParameters;
@@ -846,6 +973,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (mediaCount === 1 || mediaCount % 50 === 0) {
           console.log(`${logPrefix(wsId)} media chunks`, mediaCount);
         }
+        updateBytesWindow(Buffer.byteLength(event.media.payload, "base64"));
         if (realtimeReady) {
           if (useAudioSchema) {
             if (audioMode === "pcmu") {

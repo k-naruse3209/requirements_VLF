@@ -1,3 +1,7 @@
+import path from "node:path";
+
+const defaultCatalogPath = path.join(process.cwd(), "catalog.json");
+
 export const config = {
   port: Number(process.env.WS_PORT || 8080),
   realtimeUrl: process.env.REALTIME_URL || "wss://api.openai.com/v1/realtime",
@@ -35,5 +39,5 @@ export const config = {
   toolOrderTimeoutMs: Number(process.env.TOOL_ORDER_TIMEOUT_MS || 4000),
   orderRetryMax: Number(process.env.ORDER_RETRY_MAX || 1),
   deliveryRetryMax: Number(process.env.DELIVERY_RETRY_MAX || 1),
-  productCatalogPath: process.env.PRODUCT_CATALOG_PATH || "",
+  productCatalogPath: process.env.PRODUCT_CATALOG_PATH || defaultCatalogPath,
 };

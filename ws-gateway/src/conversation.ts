@@ -301,6 +301,7 @@ export const createConversationController = ({
   let silenceTimer: NodeJS.Timeout | null = null;
   let noHearTimer: NodeJS.Timeout | null = null;
   let waitingForCommit = false;
+  let skipRequirementPromptOnce = false;
   const pendingTranscripts: Array<{ text: string; confidence: number | null }> = [];
 
   const context: ConversationContext = {
@@ -363,6 +364,11 @@ export const createConversationController = ({
         break;
       }
       case "ST_RequirementCheck": {
+        if (skipRequirementPromptOnce) {
+          skipRequirementPromptOnce = false;
+          startSilenceTimer();
+          break;
+        }
         if (context.awaitingBrandConfirm && context.riceBrand) {
           onPrompt(`「${context.riceBrand}」でよろしいですか？`);
         } else if (context.brandConfirmed && !context.riceWeightKg) {
@@ -381,21 +387,31 @@ export const createConversationController = ({
           context.riceBrand ?? context.category,
           context.suggestedProductIds
         );
-        if (!product) {
-          context.closingReason = "error";
-          onPrompt("申し訳ございません。現在ご案内できるお米がありません。失礼いたします。");
-          return enterState("ST_Closing");
+        if (product) {
+          context.product = product;
+          context.suggestedProductIds.push(product.id);
+        } else {
+          // Fallback: present a virtual suggestion even if catalog is missing.
+          context.product = {
+            id: `virtual-${context.riceBrand ?? "rice"}-${context.riceWeightKg ?? "x"}`,
+            name: context.riceBrand && context.riceWeightKg
+              ? `${context.riceBrand} ${context.riceWeightKg}kg`
+              : "お米",
+            category: context.riceBrand ?? "rice",
+            description: "",
+            specs: "",
+            price: 0,
+          };
         }
-        context.product = product;
-        context.suggestedProductIds.push(product.id);
-        const details = [product.description, product.specs].filter(Boolean).join(" ");
+        const selected = product ?? context.product;
+        const details = [selected?.description, selected?.specs].filter(Boolean).join(" ");
         const detailText = details ? ` ${details}` : "";
         const summary =
           context.riceBrand && context.riceWeightKg
             ? `「${context.riceBrand}」${context.riceWeightKg}kgで承りました。`
             : "";
         onPrompt(
-          `${summary}${product.name}はいかがでしょうか。${detailText}こちらでよろしいですか？`
+          `${summary}${selected?.name ?? "お米"}はいかがでしょうか。${detailText}こちらでよろしいですか？`
         );
         startSilenceTimer();
         break;
@@ -567,6 +583,7 @@ export const createConversationController = ({
 
   const exitGreetingIfNeeded = async () => {
     if (state !== "ST_Greeting") return;
+    skipRequirementPromptOnce = true;
     await enterState("ST_RequirementCheck");
     await flushGreetingQueue();
   };
