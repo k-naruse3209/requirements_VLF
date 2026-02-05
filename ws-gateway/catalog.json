@@ -1,0 +1,42 @@
+[
+  {
+    "id": "rice-koshihikari-5kg",
+    "name": "コシヒカリ 5kg",
+    "category": "コシヒカリ",
+    "description": "新潟産",
+    "specs": "精米",
+    "price": 3200
+  },
+  {
+    "id": "rice-koshihikari-10kg",
+    "name": "コシヒカリ 10kg",
+    "category": "コシヒカリ",
+    "description": "新潟産",
+    "specs": "精米",
+    "price": 5980
+  },
+  {
+    "id": "rice-akitakomachi-5kg",
+    "name": "あきたこまち 5kg",
+    "category": "あきたこまち",
+    "description": "秋田産",
+    "specs": "精米",
+    "price": 3000
+  },
+  {
+    "id": "rice-akitakomachi-10kg",
+    "name": "あきたこまち 10kg",
+    "category": "あきたこまち",
+    "description": "秋田産",
+    "specs": "精米",
+    "price": 5600
+  },
+  {
+    "id": "rice-yumepirika-5kg",
+    "name": "ゆめぴりか 5kg",
+    "category": "ゆめぴりか",
+    "description": "北海道産",
+    "specs": "精米",
+    "price": 3400
+  }
+]

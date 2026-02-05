@@ -58,6 +58,8 @@ type ConversationContext = {
   awaitingAddressConfirm: boolean;
   awaitingCategoryConfirm: boolean;
   awaitingBrandConfirm: boolean;
+  awaitingWeightChoice: boolean;
+  brandConfirmed: boolean;
   customerPhone?: string;
   orderId?: string;
   suggestedProductIds: string[];
@@ -86,6 +88,7 @@ const punctuationOnlyPattern = /^[\s\p{P}\p{S}]+$/u;
 
 const isYes = (text: string) => yesPattern.test(text);
 const isNo = (text: string) => noPattern.test(text);
+const isJapaneseLike = (text: string) => japaneseCharPattern.test(text);
 
 const normalizeText = (text: string) => text.trim();
 
@@ -109,6 +112,9 @@ const riceBrandDictionary: Record<string, string[]> = {
   ゆめぴりか: ["ゆめぴりか", "夢ぴりか", "ゆめぴ"],
   ななつぼし: ["ななつぼし", "七つ星", "ななつ"],
 };
+
+const allowedRiceWeights = [5, 10, 20];
+const weightOptionsPrompt = "5kg、10kg、20kgがあります。この中からお選びください。";
 
 const normalizeBrandText = (text: string) => {
   const normalized = normalizeRiceText(text);
@@ -295,6 +301,7 @@ export const createConversationController = ({
   let silenceTimer: NodeJS.Timeout | null = null;
   let noHearTimer: NodeJS.Timeout | null = null;
   let waitingForCommit = false;
+  const pendingTranscripts: Array<{ text: string; confidence: number | null }> = [];
 
   const context: ConversationContext = {
     suggestedProductIds: [],
@@ -307,6 +314,8 @@ export const createConversationController = ({
     awaitingAddressConfirm: false,
     awaitingCategoryConfirm: false,
     awaitingBrandConfirm: false,
+    awaitingWeightChoice: false,
+    brandConfirmed: false,
   };
 
   const clearTimers = () => {
@@ -351,14 +360,13 @@ export const createConversationController = ({
         onPrompt(
           "お電話ありがとうございます。お米のご注文ですね。銘柄と量を教えてください。"
         );
-        startSilenceTimer();
         break;
       }
       case "ST_RequirementCheck": {
-        if (context.riceBrand && context.riceWeightKg) {
-          onPrompt(`「${context.riceBrand}」${context.riceWeightKg}kgでよろしいでしょうか？`);
-        } else if (context.riceBrand && !context.riceWeightKg) {
-          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+        if (context.awaitingBrandConfirm && context.riceBrand) {
+          onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+        } else if (context.brandConfirmed && !context.riceWeightKg) {
+          onPrompt(weightOptionsPrompt);
         } else if (!context.riceBrand && context.riceWeightKg) {
           onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
         } else {
@@ -382,8 +390,12 @@ export const createConversationController = ({
         context.suggestedProductIds.push(product.id);
         const details = [product.description, product.specs].filter(Boolean).join(" ");
         const detailText = details ? ` ${details}` : "";
+        const summary =
+          context.riceBrand && context.riceWeightKg
+            ? `「${context.riceBrand}」${context.riceWeightKg}kgで承りました。`
+            : "";
         onPrompt(
-          `${product.name}はいかがでしょうか。${detailText}こちらでよろしいですか？`
+          `${summary}${product.name}はいかがでしょうか。${detailText}こちらでよろしいですか？`
         );
         startSilenceTimer();
         break;
@@ -545,7 +557,26 @@ export const createConversationController = ({
     startSilenceTimer();
   };
 
+  const flushGreetingQueue = async () => {
+    if (!pendingTranscripts.length) return;
+    const queued = pendingTranscripts.splice(0, pendingTranscripts.length);
+    for (const item of queued) {
+      await handleUserTranscript(item.text, item.confidence);
+    }
+  };
+
+  const exitGreetingIfNeeded = async () => {
+    if (state !== "ST_Greeting") return;
+    await enterState("ST_RequirementCheck");
+    await flushGreetingQueue();
+  };
+
   const handleUserTranscript = async (text: string, confidence: number | null) => {
+    if (state === "ST_Greeting") {
+      pendingTranscripts.push({ text, confidence });
+      onLog("transcript.queued", { text });
+      return;
+    }
     const normalized = normalizeText(text);
     if (!normalized) return;
     if (shouldIgnoreTranscript(normalized)) {
@@ -564,8 +595,34 @@ export const createConversationController = ({
 
     const weightCandidate = extractWeightKg(normalized);
     const brandCandidate = extractRiceBrand(normalized);
+    const wasAwaitingBrandConfirm = context.awaitingBrandConfirm;
+    const wasAwaitingWeightChoice = context.awaitingWeightChoice;
+    const wasBrandConfirmed = context.brandConfirmed;
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
+    if (!hasInfo && !isJapaneseLike(normalized)) {
+      onLog("transcript.skip_non_japanese", { text: normalized });
+      return;
+    }
     if (!hasInfo) {
+      if (context.awaitingBrandConfirm && context.riceBrand) {
+        if (isYes(normalized)) {
+          context.awaitingBrandConfirm = false;
+          context.brandConfirmed = true;
+          context.riceWeightKg = undefined;
+          context.awaitingWeightChoice = true;
+          onPrompt(weightOptionsPrompt);
+          startSilenceTimer();
+          return;
+        }
+        if (isNo(normalized)) {
+          context.riceBrand = undefined;
+          context.brandConfirmed = false;
+          context.awaitingBrandConfirm = false;
+          onPrompt("承知いたしました。銘柄を教えてください。");
+          startSilenceTimer();
+          return;
+        }
+      }
       if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
         if (context.noHearRetries === 0) {
           context.noHearRetries += 1;
@@ -581,7 +638,8 @@ export const createConversationController = ({
     if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
       if (brandCandidate) {
         context.riceBrand = brandCandidate.brand;
-        context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
+        context.brandConfirmed = false;
+        context.awaitingBrandConfirm = true;
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -597,11 +655,21 @@ export const createConversationController = ({
     }
 
     if (brandCandidate) {
-      context.riceBrand = brandCandidate.brand;
-      context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
+      if (context.riceBrand !== brandCandidate.brand) {
+        context.riceBrand = brandCandidate.brand;
+        context.brandConfirmed = false;
+        context.riceWeightKg = undefined;
+        context.awaitingWeightChoice = false;
+      }
+      context.awaitingBrandConfirm = true;
     }
     if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
-      context.riceWeightKg = weightCandidate;
+      if (context.awaitingWeightChoice || context.brandConfirmed) {
+        if (allowedRiceWeights.includes(weightCandidate)) {
+          context.riceWeightKg = weightCandidate;
+          context.awaitingWeightChoice = false;
+        }
+      }
     }
     if (context.riceBrand || context.riceWeightKg) {
       onInquiryUpdate({
@@ -611,6 +679,27 @@ export const createConversationController = ({
         deliveryDate: context.deliveryDate,
         note: context.riceNote,
       });
+    }
+
+    if (
+      context.riceBrand &&
+      weightCandidate != null &&
+      allowedRiceWeights.includes(weightCandidate) &&
+      (wasAwaitingBrandConfirm || wasAwaitingWeightChoice || wasBrandConfirmed)
+    ) {
+      context.awaitingBrandConfirm = false;
+      context.brandConfirmed = true;
+      context.awaitingWeightChoice = false;
+      context.riceWeightKg = weightCandidate;
+      context.category = context.riceBrand;
+      onInquiryUpdate({
+        brand: context.riceBrand,
+        weightKg: context.riceWeightKg,
+        deliveryAddress: context.address,
+        deliveryDate: context.deliveryDate,
+        note: context.riceNote,
+      });
+      return enterState("ST_ProductSuggestion");
     }
 
     if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
@@ -625,27 +714,11 @@ export const createConversationController = ({
       context.riceBrand = undefined;
       context.riceWeightKg = undefined;
       context.awaitingBrandConfirm = false;
+      context.awaitingWeightChoice = false;
+      context.brandConfirmed = false;
       context.suggestedProductIds = [];
       context.deliveryRetries = 0;
       context.orderRetries = 0;
-      return enterState("ST_RequirementCheck");
-    }
-
-    if (state === "ST_Greeting") {
-      if (greetingPattern.test(normalized)) {
-        onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
-        startSilenceTimer();
-        return;
-      }
-      if (context.awaitingBrandConfirm && context.riceBrand) {
-        onPrompt(`「${context.riceBrand}」でよろしいですか？`);
-        startSilenceTimer();
-        return;
-      }
-      if (context.riceBrand && context.riceWeightKg) {
-        context.category = context.riceBrand;
-        return enterState("ST_ProductSuggestion");
-      }
       return enterState("ST_RequirementCheck");
     }
 
@@ -656,25 +729,60 @@ export const createConversationController = ({
         return;
       }
       if (context.awaitingBrandConfirm && context.riceBrand) {
+        if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
+          context.awaitingBrandConfirm = false;
+          context.brandConfirmed = true;
+          context.awaitingWeightChoice = false;
+          context.riceWeightKg = weightCandidate;
+          context.category = context.riceBrand;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
+          return enterState("ST_ProductSuggestion");
+        }
         if (isYes(normalized)) {
           context.awaitingBrandConfirm = false;
-          if (context.riceWeightKg) {
-            context.category = context.riceBrand;
-            return enterState("ST_ProductSuggestion");
-          }
-          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+          context.brandConfirmed = true;
+          context.riceWeightKg = undefined;
+          context.awaitingWeightChoice = true;
+          onPrompt(weightOptionsPrompt);
           startSilenceTimer();
           return;
         }
         if (isNo(normalized)) {
           context.riceBrand = undefined;
+          context.brandConfirmed = false;
           context.awaitingBrandConfirm = false;
-          onPrompt("承知いたしました。銘柄と量を教えてください。");
+          onPrompt("承知いたしました。銘柄を教えてください。");
           startSilenceTimer();
           return;
         }
       }
-      if (context.riceBrand && context.riceWeightKg) {
+      if (context.awaitingWeightChoice) {
+        if (weightCandidate != null && allowedRiceWeights.includes(weightCandidate)) {
+          context.riceWeightKg = weightCandidate;
+          context.awaitingWeightChoice = false;
+          if (context.riceBrand) {
+            context.category = context.riceBrand;
+          }
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
+          return enterState("ST_ProductSuggestion");
+        }
+        onPrompt(weightOptionsPrompt);
+        startSilenceTimer();
+        return;
+      }
+      if (context.brandConfirmed && context.riceBrand && context.riceWeightKg) {
         context.category = context.riceBrand;
         return enterState("ST_ProductSuggestion");
       }
@@ -683,12 +791,17 @@ export const createConversationController = ({
         startSilenceTimer();
         return;
       }
-      if (context.riceBrand && !context.riceWeightKg) {
-        onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+      if (context.riceBrand && !context.brandConfirmed) {
+        onPrompt(`「${context.riceBrand}」でよろしいですか？`);
         startSilenceTimer();
         return;
       }
-      onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+      if (context.riceBrand && context.brandConfirmed && !context.riceWeightKg) {
+        onPrompt(weightOptionsPrompt);
+        startSilenceTimer();
+        return;
+      }
+      onPrompt("銘柄（例: コシヒカリ）を教えてください。");
       startSilenceTimer();
       return;
     }
@@ -825,6 +938,7 @@ export const createConversationController = ({
     onUserCommitted: () => {
       waitingForCommit = false;
       clearTimers();
+      void exitGreetingIfNeeded();
     },
     onSpeechStarted: () => {
       waitingForCommit = true;
@@ -840,6 +954,10 @@ export const createConversationController = ({
       clearTimers();
     },
     onAssistantDone: () => {
+      if (state === "ST_Greeting") {
+        void exitGreetingIfNeeded().catch((err) => onLog("state.transition.failed", err));
+        return;
+      }
       if (state !== "ST_Closing" && config.silenceAutoPromptEnabled && !waitingForCommit) {
         startSilenceTimer();
       }
