@@ -18,6 +18,13 @@ export const config = {
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
     "You are a helpful assistant. Always respond in Japanese. Keep responses to one short sentence and wait for the user's reply.",
+  // Realtime "verbatim-ish" tuning (best-effort: cannot guarantee 100% determinism)
+  // Realtime beta sessions clamp temperature (currently 0.6–1.2). Use the minimum to reduce variance.
+  realtimeTemperature: Number(process.env.REALTIME_TEMPERATURE || 0.6),
+  realtimeMaxResponseOutputTokens: process.env.REALTIME_MAX_OUTPUT_TOKENS === "inf"
+    ? "inf"
+    : Number(process.env.REALTIME_MAX_OUTPUT_TOKENS || 120),
+  realtimeVerbatimEnabled: process.env.REALTIME_VERBATIM === "1",
   silenceTimeoutMs: Number(process.env.SILENCE_TIMEOUT_MS || 7000),
   silenceRetriesMax: Number(process.env.SILENCE_RETRIES_MAX || 2),
   noHearRetriesMax: Number(process.env.NOHEAR_RETRIES_MAX || 2),

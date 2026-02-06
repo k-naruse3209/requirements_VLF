@@ -34,6 +34,19 @@ const safeJson = (data: string): unknown => {
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
 
+const buildVerbatimInstructions = (verbatimText: string) => {
+  // Best-effort: model can still deviate, but this significantly reduces paraphrasing.
+  // Keep this SHORT to avoid instruction dilution.
+  return [
+    "次の文章を一字一句そのまま読み上げてください。",
+    "言い換え・補足・前置き・語尾の追加は禁止です。",
+    "文章の内容を変えず、ちょうど同じ文字列で出力してください。",
+    "",
+    "=== 読み上げ文 ===",
+    verbatimText,
+  ].join("\n");
+};
+
 const extractContentText = (content: unknown): string | null => {
   if (!Array.isArray(content)) return null;
   for (const part of content) {
@@ -453,8 +466,11 @@ wss.on("connection", (ws: WebSocket) => {
 
   const createResponse = (instructions?: string) => {
     if (!instructions) return;
+    const finalInstructions = config.realtimeVerbatimEnabled
+      ? buildVerbatimInstructions(instructions)
+      : instructions;
     if (responseActive || responsePending) {
-      promptQueue.push(instructions);
+      promptQueue.push(finalInstructions);
       console.log(`${logPrefix(wsId)} queue response.create (active/pending)`, {
         queued: promptQueue.length,
       });
@@ -465,6 +481,8 @@ wss.on("connection", (ws: WebSocket) => {
       ? {
           type: "response.create",
           response: {
+            conversation: "none",
+            max_output_tokens: config.realtimeMaxResponseOutputTokens,
             audio: {
               output: {
                 format: {
@@ -474,29 +492,31 @@ wss.on("connection", (ws: WebSocket) => {
                 voice: "alloy",
               },
             },
-            ...(instructions ? { instructions } : {}),
+            ...(finalInstructions ? { instructions: finalInstructions } : {}),
             metadata: { client_request_id: requestId, source: "gateway" },
           },
         }
       : {
           type: "response.create",
           response: {
+            conversation: "none",
+            max_output_tokens: config.realtimeMaxResponseOutputTokens,
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
-            ...(instructions ? { instructions } : {}),
+            ...(finalInstructions ? { instructions: finalInstructions } : {}),
             metadata: { client_request_id: requestId, source: "gateway" },
           },
         };
     logOutgoing("response.create", payload);
     responsePending = true;
-    lastAssistantPrompt = instructions;
-    pendingResponseRequests.set(requestId, { ts: Date.now(), prompt: instructions });
+    lastAssistantPrompt = finalInstructions;
+    pendingResponseRequests.set(requestId, { ts: Date.now(), prompt: finalInstructions });
     sendToRealtime(payload);
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "assistant",
-        content: instructions,
+        content: finalInstructions,
         started_at: new Date().toISOString(),
         ended_at: new Date().toISOString(),
       });
@@ -714,6 +734,8 @@ wss.on("connection", (ws: WebSocket) => {
             session: {
               type: "realtime",
               instructions: config.realtimeInstructions,
+              temperature: config.realtimeTemperature,
+              max_response_output_tokens: config.realtimeMaxResponseOutputTokens,
               audio: {
                 input: inputAudio,
                 output: {
@@ -731,6 +753,8 @@ wss.on("connection", (ws: WebSocket) => {
           type: "session.update",
           session: {
             instructions: config.realtimeInstructions,
+              temperature: config.realtimeTemperature,
+              max_response_output_tokens: config.realtimeMaxResponseOutputTokens,
             input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
