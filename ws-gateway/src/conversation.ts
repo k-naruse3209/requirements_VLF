@@ -482,7 +482,7 @@ export const createConversationController = ({
       }
 
       case "ST_ProductSuggestion": {
-        // ★ここが最大の修正点：商品を確定し、次（在庫→価格→住所…）へ繋ぐ
+        // 商品を確定し、音声応答が完了したタイミング（onAssistantDone）で在庫確認へ進む
         if (!context.riceBrand || !context.riceWeightKg) {
           return enterState("ST_RequirementCheck");
         }
@@ -1142,13 +1142,9 @@ export const createConversationController = ({
         return;
       }
       if (state === "ST_ProductSuggestion") {
-        if (!completedPrompt) {
-          onLog("productsuggestion.defer_address", {
-            reason: "missing completedPrompt",
-          });
-          return;
-        }
-        void enterState("ST_AddressConfirm").catch((err) =>
+        // ProductSuggestion の発話完了後に在庫→価格→住所…の順で進める
+        // Realtime API では response.done が常に届くので、ここで次状態に遷移する設計が安定します。
+        void enterState("ST_StockCheck").catch((err) =>
           onLog("state.transition.failed", err)
         );
         return;
