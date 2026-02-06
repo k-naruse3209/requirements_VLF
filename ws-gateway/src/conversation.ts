@@ -81,6 +81,9 @@ type ConversationContext = {
   deliveryRetries: number;
   orderRetries: number;
 
+  // ★追加：配送日の「No」の後に “キャンセル確認” を待つ
+  awaitingDeliveryCancelConfirm: boolean;
+
   closingReason: "success" | "cancel" | "error";
 };
 
@@ -352,6 +355,7 @@ const pickProduct = (
   );
   return categoryMatch || catalog.find((item) => !excludeIds.includes(item.id));
 };
+
 export const createConversationController = ({
   catalog,
   toolClient,
@@ -390,6 +394,8 @@ export const createConversationController = ({
     awaitingWeightChoice: false,
     awaitingMillingChoice: false,
     brandConfirmed: false,
+
+    awaitingDeliveryCancelConfirm: false,
   };
 
   const allowedRiceWeights = (() => {
@@ -404,6 +410,7 @@ export const createConversationController = ({
       ? Array.from(set).sort((a, b) => a - b)
       : [...defaultRiceWeights];
   })();
+
   const weightOptionsPrompt = buildWeightPrompt(allowedRiceWeights);
 
   const selectRiceProduct = (brand: string, weightKg: number) => {
@@ -486,20 +493,23 @@ export const createConversationController = ({
         if (!context.riceBrand || !context.riceWeightKg) {
           return enterState("ST_RequirementCheck");
         }
-        // category は銘柄で固定し、重さ一致SKUを優先
         context.category = context.riceBrand;
+
         const picked =
           selectRiceProduct(context.riceBrand, context.riceWeightKg) ||
           pickProduct(catalog, context.category, context.suggestedProductIds);
+
         if (!picked) {
           context.closingReason = "error";
           onPrompt("該当商品が見つかりませんでした。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
+
         context.product = picked;
         if (context.product.description) {
           context.riceNote = context.product.description;
         }
+
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -523,7 +533,6 @@ export const createConversationController = ({
         try {
           const stock = await toolClient.getStock(context.product.id);
           if (!stock.available) {
-            // ★在庫なし：同一商品を避けて再提案
             context.suggestedProductIds.push(context.product.id);
             context.product = undefined;
             onPrompt(
@@ -582,11 +591,19 @@ export const createConversationController = ({
       }
 
       case "ST_DeliveryCheck": {
+        // ★キャンセル確認待ちの場合はツールを叩き直さない
+        if (context.awaitingDeliveryCancelConfirm) {
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          break;
+        }
+
         if (!context.product || !context.address) {
           context.closingReason = "error";
           onPrompt("配送先情報が取得できませんでした。失礼いたします。");
           return enterState("ST_Closing");
         }
+
         try {
           const delivery = await toolClient.getDeliveryDate(
             context.product.id,
@@ -606,6 +623,7 @@ export const createConversationController = ({
           onPrompt("配送日の取得に失敗しました。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
+
         onPrompt(`配送は${context.deliveryDate}の予定です。よろしいですか？`);
         startSilenceTimer();
         break;
@@ -678,8 +696,7 @@ export const createConversationController = ({
       return;
     }
     onLog("state.exception", { type: "EX_Silence", retries: context.silenceRetries });
-    onPrompt("もしもし、お聞きになっていますか？");
-    startSilenceTimer();
+    await enterState("EX_Silence");
   };
 
   const handleNoHearTimeout = async () => {
@@ -690,8 +707,7 @@ export const createConversationController = ({
       return;
     }
     onLog("state.exception", { type: "EX_NoHear", retries: context.noHearRetries });
-    onPrompt("申し訳ございません、もう一度おっしゃっていただけますか？");
-    startSilenceTimer();
+    await enterState("EX_NoHear");
   };
 
   const flushGreetingQueue = async () => {
@@ -737,10 +753,19 @@ export const createConversationController = ({
     context.suggestedProductIds = [];
     context.deliveryRetries = 0;
     context.orderRetries = 0;
+
+    context.awaitingDeliveryCancelConfirm = false;
+
     await enterState("ST_RequirementCheck");
   };
 
   const handleUserTranscript = async (text: string, confidence: number | null) => {
+    // ★例外 state からは直前の対話 state に復帰して処理
+    if (state === "EX_Silence" || state === "EX_NoHear") {
+      state = lastInteractiveState;
+      onLog("state.resume", { resumedTo: state });
+    }
+
     if (state === "ST_Greeting") {
       pendingTranscripts.push({ text, confidence });
       onLog("transcript.queued", { text });
@@ -750,7 +775,6 @@ export const createConversationController = ({
     const normalized = normalizeText(text);
     if (!normalized) return;
 
-    // ★住所・電話は非日本語/短文でも通す（米要件は従来通りフィルタ）
     const allowFreeText =
       state === "ST_AddressConfirm" ||
       (state === "ST_OrderConfirmation" && !context.customerPhone);
@@ -769,12 +793,10 @@ export const createConversationController = ({
 
     resetRetries();
 
-    // correction keyword
     if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
       return resetAllForCorrection();
     }
 
-    // 米関連の抽出
     let weightCandidate = extractWeightKg(normalized);
     if (
       weightCandidate == null &&
@@ -786,16 +808,15 @@ export const createConversationController = ({
         onLog("weight.loose_match", { text: normalized, weightKg: loose });
       }
     }
+
     const brandCandidate = extractRiceBrand(normalized);
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
 
-    // 住所/電話は allowFreeText なのでここはスキップ
     if (!allowFreeText && !hasInfo && !isJapaneseLike(normalized)) {
       onLog("transcript.skip_non_japanese", { text: normalized });
       return;
     }
 
-    // milling（現状フロー未接続だが、将来用に拾う）
     const milling = extractMilling(normalized);
     if (milling) context.riceMilling = milling;
 
@@ -808,7 +829,6 @@ export const createConversationController = ({
         context.brandConfirmed = true;
         context.awaitingWeightChoice = true;
 
-        // 同発話で「10kg」などが入った場合
         if (
           weightCandidate != null &&
           allowedRiceWeights.includes(weightCandidate as any)
@@ -840,7 +860,6 @@ export const createConversationController = ({
         return;
       }
 
-      // YES/NOじゃなくても、重さが取れたら進める
       if (
         weightCandidate != null &&
         allowedRiceWeights.includes(weightCandidate as any)
@@ -892,7 +911,6 @@ export const createConversationController = ({
       return;
     }
 
-    // brand は既に確定済みだが awaitingWeightChoice が外れてしまったケースの救済
     if (
       context.brandConfirmed &&
       context.riceBrand &&
@@ -921,8 +939,18 @@ export const createConversationController = ({
       context.brandConfirmed = false;
       context.awaitingBrandConfirm = true;
 
-      // 「銘柄確定」前は重さを一旦クリア（既存挙動を踏襲）
-      context.riceWeightKg = undefined;
+      // ★修正：同一発話で重さが取れているなら保持（強制クリアしない）
+      if (
+        weightCandidate != null &&
+        allowedRiceWeights.includes(weightCandidate as any)
+      ) {
+        context.riceWeightKg = weightCandidate;
+      } else {
+        context.riceWeightKg = undefined;
+      }
+
+      // 重さが入った場合、次は「銘柄確認→（YESなら即 ProductSuggestion）」へ
+      // 重さがない場合、従来通り「銘柄確認→重さ選択」へ
       context.awaitingWeightChoice = false;
 
       onInquiryUpdate({
@@ -969,7 +997,6 @@ export const createConversationController = ({
       }
 
       if (state === "ST_ProductSuggestion") {
-        // ここは商品確定→次状態へが enterState 側で走るので基本無処理
         return;
       }
 
@@ -1007,7 +1034,7 @@ export const createConversationController = ({
         }
 
         if (!context.address) {
-          context.address = normalized; // ★非日本語も通る
+          context.address = normalized;
           context.awaitingAddressConfirm = true;
           onInquiryUpdate({
             brand: context.riceBrand,
@@ -1021,7 +1048,6 @@ export const createConversationController = ({
           return;
         }
 
-        // address があるのに awaiting でないケースは再確認へ
         context.awaitingAddressConfirm = true;
         onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
         startSilenceTimer();
@@ -1029,21 +1055,44 @@ export const createConversationController = ({
       }
 
       if (state === "ST_DeliveryCheck") {
+        // ★配送日の No を “同じ state 再 enter（=ツール再実行）” にしない
+        if (context.awaitingDeliveryCancelConfirm) {
+          if (isYes(normalized)) {
+            context.awaitingDeliveryCancelConfirm = false;
+            context.closingReason = "cancel";
+            return enterState("ST_Closing");
+          }
+          if (isNo(normalized)) {
+            context.awaitingDeliveryCancelConfirm = false;
+            // 「キャンセルしない」＝その配送日で進める
+            return enterState("ST_OrderConfirmation");
+          }
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          return;
+        }
+
         if (isYes(normalized)) return enterState("ST_OrderConfirmation");
         if (isNo(normalized)) {
-          if (context.deliveryRetries < config.deliveryRetryMax) {
-            context.deliveryRetries += 1;
-            return enterState("ST_DeliveryCheck");
+          context.deliveryRetries += 1;
+          if (context.deliveryRetries > config.deliveryRetryMax) {
+            context.closingReason = "cancel";
+            return enterState("ST_Closing");
           }
-          context.closingReason = "cancel";
-          return enterState("ST_Closing");
+          context.awaitingDeliveryCancelConfirm = true;
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          return;
         }
-        return enterState("ST_DeliveryCheck");
+
+        // 不明入力は同じ質問を継続（ツール再実行はしない）
+        onPrompt(`配送は${context.deliveryDate}の予定です。よろしいですか？`);
+        startSilenceTimer();
+        return;
       }
 
       if (state === "ST_OrderConfirmation") {
         if (!context.customerPhone) {
-          // ★電話番号は非日本語も通す
           context.customerPhone = normalized;
           onInquiryUpdate({
             brand: context.riceBrand,
@@ -1062,7 +1111,6 @@ export const createConversationController = ({
         return enterState("ST_Closing");
       }
 
-      // その他：情報なしは軽く促す（元ロジック踏襲）
       onLog("transcript.noinfo", { text: normalized, state });
       return;
     }
@@ -1123,8 +1171,6 @@ export const createConversationController = ({
     },
 
     onSpeechStopped: () => {
-      // commit が必ず来る前提ならこのままでもOK。
-      // 実装によって commit が来ない場合は waitingForCommit を戻す設計も検討。
       if (!waitingForCommit && config.noHearAutoPromptEnabled) {
         startNoHearTimer();
       }
@@ -1134,7 +1180,7 @@ export const createConversationController = ({
       clearTimers();
     },
 
-    onAssistantDone: (completedPrompt?: string) => {
+    onAssistantDone: (_completedPrompt?: string) => {
       if (state === "ST_Greeting") {
         void exitGreetingIfNeeded().catch((err) =>
           onLog("state.transition.failed", err)
@@ -1142,14 +1188,16 @@ export const createConversationController = ({
         return;
       }
       if (state === "ST_ProductSuggestion") {
-        // ProductSuggestion の発話完了後に在庫→価格→住所…の順で進める
-        // Realtime API では response.done が常に届くので、ここで次状態に遷移する設計が安定します。
         void enterState("ST_StockCheck").catch((err) =>
           onLog("state.transition.failed", err)
         );
         return;
       }
-      if (state !== "ST_Closing" && config.silenceAutoPromptEnabled && !waitingForCommit) {
+      if (
+        state !== "ST_Closing" &&
+        config.silenceAutoPromptEnabled &&
+        !waitingForCommit
+      ) {
         startSilenceTimer();
       }
     },
