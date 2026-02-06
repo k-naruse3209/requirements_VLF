@@ -1,7 +1,11 @@
+import path from "node:path";
+
+const defaultCatalogPath = path.join(process.cwd(), "catalog.json");
+
 export const config = {
   port: Number(process.env.WS_PORT || 8080),
   realtimeUrl: process.env.REALTIME_URL || "wss://api.openai.com/v1/realtime",
-  realtimeModel: process.env.REALTIME_MODEL || "gpt-4o-realtime-preview",
+  realtimeModel: process.env.REALTIME_MODEL || "gpt-realtime",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   testPrompt: process.env.TEST_PROMPT || "",
   realtimeBetaHeader: process.env.REALTIME_BETA_HEADER !== "0",
@@ -10,6 +14,7 @@ export const config = {
   realtimeAudioRate: Number(process.env.REALTIME_AUDIO_RATE || 24000),
   realtimeCommitFrames: Number(process.env.REALTIME_COMMIT_FRAMES || 50),
   realtimeTranscriptionModel: process.env.REALTIME_TRANSCRIPTION_MODEL || "",
+  bargeInCancelEnabled: process.env.BARGE_IN_CANCEL === "1",
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
     "You are a helpful assistant. Always respond in Japanese. Keep responses to one short sentence and wait for the user's reply.",
@@ -35,5 +40,5 @@ export const config = {
   toolOrderTimeoutMs: Number(process.env.TOOL_ORDER_TIMEOUT_MS || 4000),
   orderRetryMax: Number(process.env.ORDER_RETRY_MAX || 1),
   deliveryRetryMax: Number(process.env.DELIVERY_RETRY_MAX || 1),
-  productCatalogPath: process.env.PRODUCT_CATALOG_PATH || "",
+  productCatalogPath: process.env.PRODUCT_CATALOG_PATH || defaultCatalogPath,
 };

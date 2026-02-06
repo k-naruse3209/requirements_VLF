@@ -20,9 +20,14 @@ export type Product = {
 };
 
 type ToolClient = {
-  getStock: (productId: string) => Promise<{ available: boolean; quantity?: number }>;
+  getStock: (
+    productId: string
+  ) => Promise<{ available: boolean; quantity?: number }>;
   getPrice: (productId: string) => Promise<{ price: number; currency?: string }>;
-  getDeliveryDate: (productId: string, address: string) => Promise<{ deliveryDate: string }>;
+  getDeliveryDate: (
+    productId: string,
+    address: string
+  ) => Promise<{ deliveryDate: string }>;
   saveOrder: (payload: {
     productId: string;
     price: number;
@@ -53,18 +58,32 @@ type ConversationContext = {
   address?: string;
   riceBrand?: string;
   riceWeightKg?: number;
+  riceMilling?: "精米" | "玄米";
   riceNote?: string;
+
   addressConfirmed: boolean;
   awaitingAddressConfirm: boolean;
+
   awaitingCategoryConfirm: boolean;
   awaitingBrandConfirm: boolean;
+  awaitingWeightChoice: boolean;
+  awaitingMillingChoice: boolean;
+
+  brandConfirmed: boolean;
+
   customerPhone?: string;
   orderId?: string;
+
   suggestedProductIds: string[];
+
   silenceRetries: number;
   noHearRetries: number;
   deliveryRetries: number;
   orderRetries: number;
+
+  // ★追加：配送日の「No」の後に “キャンセル確認” を待つ
+  awaitingDeliveryCancelConfirm: boolean;
+
   closingReason: "success" | "cancel" | "error";
 };
 
@@ -83,9 +102,12 @@ const noPattern = /(いいえ|いえ|違う|やめ|キャンセル|不要|結構
 const greetingPattern = /(もしもし|聞こえますか|聞こえてますか)/;
 const japaneseCharPattern = /[ぁ-んァ-ン一-龯]/;
 const punctuationOnlyPattern = /^[\s\p{P}\p{S}]+$/u;
+const seimaiPattern = /(精米|せいまい)/;
+const genmaiPattern = /(玄米|げんまい)/;
 
 const isYes = (text: string) => yesPattern.test(text);
 const isNo = (text: string) => noPattern.test(text);
+const isJapaneseLike = (text: string) => japaneseCharPattern.test(text);
 
 const normalizeText = (text: string) => text.trim();
 
@@ -102,12 +124,49 @@ export const normalizeRiceText = (text: string) => {
   return hiragana.replace(/ー/g, "");
 };
 
+const extractMilling = (text: string): "精米" | "玄米" | null => {
+  const normalized = normalizeRiceText(text);
+  if (genmaiPattern.test(normalized)) return "玄米";
+  if (seimaiPattern.test(normalized)) return "精米";
+  return null;
+};
+
 const riceBrandDictionary: Record<string, string[]> = {
-  コシヒカリ: ["こしひかり", "こし光", "こしひkari", "越光", "越ひかり", "腰光", "こしひ", "こし"],
-  あきたこまち: ["あきたこまち", "秋田こまち", "あきた小町", "秋田小町", "あきたこま", "あきた"],
+  コシヒカリ: [
+    "こしひかり",
+    "こし光",
+    "こしひkari",
+    "越光",
+    "越ひかり",
+    "腰光",
+    "こしひ",
+    "こし",
+  ],
+  あきたこまち: [
+    "あきたこまち",
+    "秋田こまち",
+    "あきた小町",
+    "秋田小町",
+    "あきたこま",
+    "あきた",
+  ],
   ひとめぼれ: ["ひとめぼれ", "一目ぼれ", "一目惚れ", "ひとめ"],
   ゆめぴりか: ["ゆめぴりか", "夢ぴりか", "ゆめぴ"],
   ななつぼし: ["ななつぼし", "七つ星", "ななつ"],
+};
+
+const defaultRiceWeights = [5, 10, 20];
+
+const buildWeightPrompt = (weights: number[]) =>
+  `${weights.map((weight) => `${weight}kg`).join("、")}があります。この中からお選びください。`;
+
+const extractCatalogWeightKg = (name: string): number | null => {
+  const normalized = name.normalize("NFKC");
+  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(?:kg|キロ)/i);
+  if (!match?.[1]) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return value;
 };
 
 const normalizeBrandText = (text: string) => {
@@ -116,7 +175,10 @@ const normalizeBrandText = (text: string) => {
     .replace(/[0-9a-z]/gi, "")
     .replace(/(kg|ｋｇ|きろ|キロ|公斤)/g, "")
     .replace(/[一二三四五六七八九十零]/g, "")
-    .replace(/(です|ください|おねがいします|お願いします|にしてください|でお願いします)/g, "")
+    .replace(
+      /(です|ください|おねがいします|お願いします|にしてください|でお願いします)/g,
+      ""
+    )
     .trim();
 };
 
@@ -126,7 +188,9 @@ const levenshtein = (a: string, b: string) => {
   const bLen = b.length;
   if (aLen === 0) return bLen;
   if (bLen === 0) return aLen;
-  const dp = Array.from({ length: aLen + 1 }, () => new Array(bLen + 1).fill(0));
+  const dp = Array.from({ length: aLen + 1 }, () =>
+    new Array(bLen + 1).fill(0)
+  );
   for (let i = 0; i <= aLen; i += 1) dp[i][0] = i;
   for (let j = 0; j <= bLen; j += 1) dp[0][j] = j;
   for (let i = 1; i <= aLen; i += 1) {
@@ -245,13 +309,26 @@ export const extractWeightKg = (text: string) => {
   return null;
 };
 
+const extractLooseWeightKg = (text: string) => {
+  const normalized = normalizeRiceText(text);
+  const digitMatch = normalized.match(/(?:^|[^0-9])([0-9]{1,2})(?:$|[^0-9])/);
+  if (digitMatch?.[1]) {
+    const value = Number(digitMatch[1]);
+    if (Number.isFinite(value)) return value;
+  }
+  const kanjiMatch = normalized.match(/([一二三四五六七八九十零]{1,3})/);
+  if (kanjiMatch?.[1]) {
+    const value = parseKanjiNumber(kanjiMatch[1]);
+    if (value != null) return value;
+  }
+  return null;
+};
+
 const isValidWeightKg = (value: number | null) => {
   if (value == null) return false;
   if (!Number.isFinite(value)) return false;
   return value >= 1 && value <= 50;
 };
-
-const backchannelPattern = /(はい|ええ|うん|うーん|えっと|あの|うんうん|うんうーん|もしもし)$/;
 
 const shouldIgnoreTranscript = (text: string) => {
   const normalized = text.trim();
@@ -264,7 +341,11 @@ const shouldIgnoreTranscript = (text: string) => {
   return false;
 };
 
-const pickProduct = (catalog: Product[], category: string | undefined, excludeIds: string[]) => {
+const pickProduct = (
+  catalog: Product[],
+  category: string | undefined,
+  excludeIds: string[]
+) => {
   if (!catalog.length) return undefined;
   if (!category) {
     return catalog.find((item) => !excludeIds.includes(item.id));
@@ -295,6 +376,8 @@ export const createConversationController = ({
   let silenceTimer: NodeJS.Timeout | null = null;
   let noHearTimer: NodeJS.Timeout | null = null;
   let waitingForCommit = false;
+  let skipRequirementPromptOnce = false;
+  const pendingTranscripts: Array<{ text: string; confidence: number | null }> = [];
 
   const context: ConversationContext = {
     suggestedProductIds: [],
@@ -303,10 +386,40 @@ export const createConversationController = ({
     deliveryRetries: 0,
     orderRetries: 0,
     closingReason: "success",
+
     addressConfirmed: false,
     awaitingAddressConfirm: false,
     awaitingCategoryConfirm: false,
     awaitingBrandConfirm: false,
+    awaitingWeightChoice: false,
+    awaitingMillingChoice: false,
+    brandConfirmed: false,
+
+    awaitingDeliveryCancelConfirm: false,
+  };
+
+  const allowedRiceWeights = (() => {
+    const set = new Set<number>();
+    for (const item of catalog) {
+      const weight = extractCatalogWeightKg(item.name);
+      if (weight != null && Number.isInteger(weight) && isValidWeightKg(weight)) {
+        set.add(weight);
+      }
+    }
+    return set.size > 0
+      ? Array.from(set).sort((a, b) => a - b)
+      : [...defaultRiceWeights];
+  })();
+
+  const weightOptionsPrompt = buildWeightPrompt(allowedRiceWeights);
+
+  const selectRiceProduct = (brand: string, weightKg: number) => {
+    const normalizedBrand = normalizeRiceText(brand);
+    return catalog.find((item) => {
+      const category = normalizeRiceText(item.category || "");
+      const itemWeight = extractCatalogWeightKg(item.name);
+      return category === normalizedBrand && itemWeight === weightKg;
+    });
   };
 
   const clearTimers = () => {
@@ -351,43 +464,66 @@ export const createConversationController = ({
         onPrompt(
           "お電話ありがとうございます。お米のご注文ですね。銘柄と量を教えてください。"
         );
-        startSilenceTimer();
         break;
       }
+
       case "ST_RequirementCheck": {
-        if (context.riceBrand && context.riceWeightKg) {
-          onPrompt(`「${context.riceBrand}」${context.riceWeightKg}kgでよろしいでしょうか？`);
-        } else if (context.riceBrand && !context.riceWeightKg) {
-          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+        if (skipRequirementPromptOnce) {
+          skipRequirementPromptOnce = false;
+          startSilenceTimer();
+          break;
+        }
+        if (context.awaitingBrandConfirm && context.riceBrand) {
+          onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+        } else if (context.brandConfirmed && !context.riceWeightKg) {
+          onPrompt(weightOptionsPrompt);
         } else if (!context.riceBrand && context.riceWeightKg) {
-          onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
+          onPrompt(
+            `量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`
+          );
         } else {
           onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
         }
         startSilenceTimer();
         break;
       }
+
       case "ST_ProductSuggestion": {
-        const product = pickProduct(
-          catalog,
-          context.riceBrand ?? context.category,
-          context.suggestedProductIds
-        );
-        if (!product) {
+        // 商品を確定し、音声応答が完了したタイミング（onAssistantDone）で在庫確認へ進む
+        if (!context.riceBrand || !context.riceWeightKg) {
+          return enterState("ST_RequirementCheck");
+        }
+        context.category = context.riceBrand;
+
+        const picked =
+          selectRiceProduct(context.riceBrand, context.riceWeightKg) ||
+          pickProduct(catalog, context.category, context.suggestedProductIds);
+
+        if (!picked) {
           context.closingReason = "error";
-          onPrompt("申し訳ございません。現在ご案内できるお米がありません。失礼いたします。");
+          onPrompt("該当商品が見つかりませんでした。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
-        context.product = product;
-        context.suggestedProductIds.push(product.id);
-        const details = [product.description, product.specs].filter(Boolean).join(" ");
-        const detailText = details ? ` ${details}` : "";
-        onPrompt(
-          `${product.name}はいかがでしょうか。${detailText}こちらでよろしいですか？`
-        );
-        startSilenceTimer();
+
+        context.product = picked;
+        if (context.product.description) {
+          context.riceNote = context.product.description;
+        }
+
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
+
+        const prompt = `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。こちらで登録しました。`;
+        onLog("productsuggestion.prompt", { prompt });
+        onPrompt(prompt);
         break;
       }
+
       case "ST_StockCheck": {
         if (!context.product) {
           context.closingReason = "error";
@@ -397,6 +533,11 @@ export const createConversationController = ({
         try {
           const stock = await toolClient.getStock(context.product.id);
           if (!stock.available) {
+            context.suggestedProductIds.push(context.product.id);
+            context.product = undefined;
+            onPrompt(
+              "申し訳ございません、在庫がありませんでした。別の商品をお探しします。"
+            );
             return enterState("ST_ProductSuggestion");
           }
         } catch (err) {
@@ -407,6 +548,7 @@ export const createConversationController = ({
         }
         return enterState("ST_PriceQuote");
       }
+
       case "ST_PriceQuote": {
         if (!context.product) {
           context.closingReason = "error";
@@ -423,11 +565,15 @@ export const createConversationController = ({
           onPrompt("価格情報の取得に失敗しました。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
-        const priceText = context.currency === "JPY" ? `${context.price}円` : `${context.price} ${context.currency}`;
+        const priceText =
+          context.currency === "JPY"
+            ? `${context.price}円`
+            : `${context.price} ${context.currency}`;
         onPrompt(`価格は${priceText}です。よろしいですか？`);
         startSilenceTimer();
         break;
       }
+
       case "ST_AddressConfirm": {
         if (context.address && context.addressConfirmed) {
           return enterState("ST_DeliveryCheck");
@@ -443,14 +589,26 @@ export const createConversationController = ({
         startSilenceTimer();
         break;
       }
+
       case "ST_DeliveryCheck": {
+        // ★キャンセル確認待ちの場合はツールを叩き直さない
+        if (context.awaitingDeliveryCancelConfirm) {
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          break;
+        }
+
         if (!context.product || !context.address) {
           context.closingReason = "error";
           onPrompt("配送先情報が取得できませんでした。失礼いたします。");
           return enterState("ST_Closing");
         }
+
         try {
-          const delivery = await toolClient.getDeliveryDate(context.product.id, context.address);
+          const delivery = await toolClient.getDeliveryDate(
+            context.product.id,
+            context.address
+          );
           context.deliveryDate = delivery.deliveryDate;
           onInquiryUpdate({
             brand: context.riceBrand,
@@ -465,12 +623,14 @@ export const createConversationController = ({
           onPrompt("配送日の取得に失敗しました。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
+
         onPrompt(`配送は${context.deliveryDate}の予定です。よろしいですか？`);
         startSilenceTimer();
         break;
       }
+
       case "ST_OrderConfirmation": {
-        if (!context.product || !context.price || !context.deliveryDate) {
+        if (!context.product || context.price == null || !context.deliveryDate) {
           context.closingReason = "error";
           onPrompt("注文内容が取得できませんでした。失礼いたします。");
           return enterState("ST_Closing");
@@ -480,13 +640,17 @@ export const createConversationController = ({
           startSilenceTimer();
           return;
         }
-        const priceText = context.currency === "JPY" ? `${context.price}円` : `${context.price} ${context.currency}`;
+        const priceText =
+          context.currency === "JPY"
+            ? `${context.price}円`
+            : `${context.price} ${context.currency}`;
         onPrompt(
           `ご注文内容は、商品:${context.product.name}、価格:${priceText}、配送:${context.deliveryDate}です。確定でよろしいですか？`
         );
         startSilenceTimer();
         break;
       }
+
       case "ST_Closing": {
         if (context.closingReason === "success") {
           onPrompt("ご注文ありがとうございました。失礼いたします。");
@@ -498,16 +662,19 @@ export const createConversationController = ({
         clearTimers();
         break;
       }
+
       case "EX_Silence": {
         onPrompt("もしもし、お聞きになっていますか？");
         startSilenceTimer();
         break;
       }
+
       case "EX_NoHear": {
         onPrompt("申し訳ございません、もう一度おっしゃっていただけますか？");
         startSilenceTimer();
         break;
       }
+
       default:
         break;
     }
@@ -529,8 +696,7 @@ export const createConversationController = ({
       return;
     }
     onLog("state.exception", { type: "EX_Silence", retries: context.silenceRetries });
-    onPrompt("もしもし、お聞きになっていますか？");
-    startSilenceTimer();
+    await enterState("EX_Silence");
   };
 
   const handleNoHearTimeout = async () => {
@@ -541,14 +707,79 @@ export const createConversationController = ({
       return;
     }
     onLog("state.exception", { type: "EX_NoHear", retries: context.noHearRetries });
-    onPrompt("申し訳ございません、もう一度おっしゃっていただけますか？");
-    startSilenceTimer();
+    await enterState("EX_NoHear");
+  };
+
+  const flushGreetingQueue = async () => {
+    if (!pendingTranscripts.length) return;
+    const queued = pendingTranscripts.splice(0, pendingTranscripts.length);
+    for (const item of queued) {
+      await handleUserTranscript(item.text, item.confidence);
+    }
+  };
+
+  const exitGreetingIfNeeded = async () => {
+    if (state !== "ST_Greeting") return;
+    skipRequirementPromptOnce = true;
+    await enterState("ST_RequirementCheck");
+    await flushGreetingQueue();
+  };
+
+  const resetAllForCorrection = async () => {
+    context.product = undefined;
+    context.price = undefined;
+    context.currency = undefined;
+    context.deliveryDate = undefined;
+    context.address = undefined;
+    context.addressConfirmed = false;
+    context.awaitingAddressConfirm = false;
+
+    context.category = undefined;
+    context.awaitingCategoryConfirm = false;
+
+    context.riceBrand = undefined;
+    context.riceWeightKg = undefined;
+    context.riceMilling = undefined;
+    context.riceNote = undefined;
+
+    context.awaitingBrandConfirm = false;
+    context.awaitingWeightChoice = false;
+    context.awaitingMillingChoice = false;
+    context.brandConfirmed = false;
+
+    context.customerPhone = undefined;
+    context.orderId = undefined;
+
+    context.suggestedProductIds = [];
+    context.deliveryRetries = 0;
+    context.orderRetries = 0;
+
+    context.awaitingDeliveryCancelConfirm = false;
+
+    await enterState("ST_RequirementCheck");
   };
 
   const handleUserTranscript = async (text: string, confidence: number | null) => {
+    // ★例外 state からは直前の対話 state に復帰して処理
+    if (state === "EX_Silence" || state === "EX_NoHear") {
+      state = lastInteractiveState;
+      onLog("state.resume", { resumedTo: state });
+    }
+
+    if (state === "ST_Greeting") {
+      pendingTranscripts.push({ text, confidence });
+      onLog("transcript.queued", { text });
+      return;
+    }
+
     const normalized = normalizeText(text);
     if (!normalized) return;
-    if (shouldIgnoreTranscript(normalized)) {
+
+    const allowFreeText =
+      state === "ST_AddressConfirm" ||
+      (state === "ST_OrderConfirmation" && !context.customerPhone);
+
+    if (!allowFreeText && shouldIgnoreTranscript(normalized)) {
       onLog("transcript.ignored", { text: normalized });
       return;
     }
@@ -562,162 +793,49 @@ export const createConversationController = ({
 
     resetRetries();
 
-    const weightCandidate = extractWeightKg(normalized);
+    if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
+      return resetAllForCorrection();
+    }
+
+    let weightCandidate = extractWeightKg(normalized);
+    if (
+      weightCandidate == null &&
+      (context.awaitingWeightChoice || context.awaitingBrandConfirm)
+    ) {
+      const loose = extractLooseWeightKg(normalized);
+      if (loose != null) {
+        weightCandidate = loose;
+        onLog("weight.loose_match", { text: normalized, weightKg: loose });
+      }
+    }
+
     const brandCandidate = extractRiceBrand(normalized);
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
-    if (!hasInfo) {
-      if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
-        if (context.noHearRetries === 0) {
-          context.noHearRetries += 1;
-          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
-          startSilenceTimer();
-        } else {
-          onLog("transcript.noinfo", { text: normalized });
-        }
-        return;
-      }
-    }
 
-    if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
-      if (brandCandidate) {
-        context.riceBrand = brandCandidate.brand;
-        context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
-        onInquiryUpdate({
-          brand: context.riceBrand,
-          weightKg: context.riceWeightKg,
-          deliveryAddress: context.address,
-          deliveryDate: context.deliveryDate,
-          note: context.riceNote,
-        });
-      }
-      onLog("weight.invalid", { value: weightCandidate });
-      onPrompt("量は1〜50kgの範囲で教えてください。");
-      startSilenceTimer();
+    if (!allowFreeText && !hasInfo && !isJapaneseLike(normalized)) {
+      onLog("transcript.skip_non_japanese", { text: normalized });
       return;
     }
 
-    if (brandCandidate) {
-      context.riceBrand = brandCandidate.brand;
-      context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
-    }
-    if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
-      context.riceWeightKg = weightCandidate;
-    }
-    if (context.riceBrand || context.riceWeightKg) {
-      onInquiryUpdate({
-        brand: context.riceBrand,
-        weightKg: context.riceWeightKg,
-        deliveryAddress: context.address,
-        deliveryDate: context.deliveryDate,
-        note: context.riceNote,
-      });
-    }
+    const milling = extractMilling(normalized);
+    if (milling) context.riceMilling = milling;
 
-    if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
-      context.product = undefined;
-      context.price = undefined;
-      context.deliveryDate = undefined;
-      context.address = undefined;
-      context.addressConfirmed = false;
-      context.awaitingAddressConfirm = false;
-      context.category = undefined;
-      context.awaitingCategoryConfirm = false;
-      context.riceBrand = undefined;
-      context.riceWeightKg = undefined;
-      context.awaitingBrandConfirm = false;
-      context.suggestedProductIds = [];
-      context.deliveryRetries = 0;
-      context.orderRetries = 0;
-      return enterState("ST_RequirementCheck");
-    }
-
-    if (state === "ST_Greeting") {
-      if (greetingPattern.test(normalized)) {
-        onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
-        startSilenceTimer();
-        return;
-      }
-      if (context.awaitingBrandConfirm && context.riceBrand) {
-        onPrompt(`「${context.riceBrand}」でよろしいですか？`);
-        startSilenceTimer();
-        return;
-      }
-      if (context.riceBrand && context.riceWeightKg) {
-        context.category = context.riceBrand;
-        return enterState("ST_ProductSuggestion");
-      }
-      return enterState("ST_RequirementCheck");
-    }
-
-    if (state === "ST_RequirementCheck") {
-      if (greetingPattern.test(normalized)) {
-        onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
-        startSilenceTimer();
-        return;
-      }
-      if (context.awaitingBrandConfirm && context.riceBrand) {
-        if (isYes(normalized)) {
-          context.awaitingBrandConfirm = false;
-          if (context.riceWeightKg) {
-            context.category = context.riceBrand;
-            return enterState("ST_ProductSuggestion");
-          }
-          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
-          startSilenceTimer();
-          return;
-        }
-        if (isNo(normalized)) {
-          context.riceBrand = undefined;
-          context.awaitingBrandConfirm = false;
-          onPrompt("承知いたしました。銘柄と量を教えてください。");
-          startSilenceTimer();
-          return;
-        }
-      }
-      if (context.riceBrand && context.riceWeightKg) {
-        context.category = context.riceBrand;
-        return enterState("ST_ProductSuggestion");
-      }
-      if (!context.riceBrand && context.riceWeightKg) {
-        onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
-        startSilenceTimer();
-        return;
-      }
-      if (context.riceBrand && !context.riceWeightKg) {
-        onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
-        startSilenceTimer();
-        return;
-      }
-      onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
-      startSilenceTimer();
-      return;
-    }
-
-    if (state === "ST_ProductSuggestion") {
+    // ─────────────────────────────────────────
+    // Brand confirm flow
+    // ─────────────────────────────────────────
+    if (context.awaitingBrandConfirm && context.riceBrand) {
       if (isYes(normalized)) {
-        return enterState("ST_StockCheck");
-      }
-      if (isNo(normalized)) {
-        return enterState("ST_RequirementCheck");
-      }
-      return enterState("ST_RequirementCheck");
-    }
+        context.awaitingBrandConfirm = false;
+        context.brandConfirmed = true;
+        context.awaitingWeightChoice = true;
 
-    if (state === "ST_PriceQuote") {
-      if (isYes(normalized)) {
-        return enterState("ST_AddressConfirm");
-      }
-      if (isNo(normalized)) {
-        return enterState("ST_ProductSuggestion");
-      }
-      return enterState("ST_ProductSuggestion");
-    }
-
-    if (state === "ST_AddressConfirm") {
-      if (context.awaitingAddressConfirm) {
-        if (isYes(normalized)) {
-          context.addressConfirmed = true;
-          context.awaitingAddressConfirm = false;
+        if (
+          weightCandidate != null &&
+          allowedRiceWeights.includes(weightCandidate as any)
+        ) {
+          context.riceWeightKg = weightCandidate;
+          context.awaitingWeightChoice = false;
+          context.category = context.riceBrand;
           onInquiryUpdate({
             brand: context.riceBrand,
             weightKg: context.riceWeightKg,
@@ -725,22 +843,32 @@ export const createConversationController = ({
             deliveryDate: context.deliveryDate,
             note: context.riceNote,
           });
-          return enterState("ST_DeliveryCheck");
+          return enterState("ST_ProductSuggestion");
         }
-        if (isNo(normalized)) {
-          context.address = undefined;
-          context.addressConfirmed = false;
-          context.awaitingAddressConfirm = false;
-          onPrompt("承知いたしました。配送先のご住所をもう一度お願いします。");
-          startSilenceTimer();
-          return;
-        }
-        onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
+
+        onPrompt(weightOptionsPrompt);
         startSilenceTimer();
         return;
-      } else if (!context.address) {
-        context.address = normalized;
-        context.awaitingAddressConfirm = true;
+      }
+
+      if (isNo(normalized)) {
+        context.riceBrand = undefined;
+        context.brandConfirmed = false;
+        context.awaitingBrandConfirm = false;
+        onPrompt("承知いたしました。銘柄を教えてください。");
+        startSilenceTimer();
+        return;
+      }
+
+      if (
+        weightCandidate != null &&
+        allowedRiceWeights.includes(weightCandidate as any)
+      ) {
+        context.awaitingBrandConfirm = false;
+        context.brandConfirmed = true;
+        context.awaitingWeightChoice = false;
+        context.riceWeightKg = weightCandidate;
+        context.category = context.riceBrand;
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -748,52 +876,257 @@ export const createConversationController = ({
           deliveryDate: context.deliveryDate,
           note: context.riceNote,
         });
+        return enterState("ST_ProductSuggestion");
+      }
+
+      onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+      startSilenceTimer();
+      return;
+    }
+
+    // ─────────────────────────────────────────
+    // Weight choice flow
+    // ─────────────────────────────────────────
+    if (context.awaitingWeightChoice) {
+      if (
+        weightCandidate != null &&
+        allowedRiceWeights.includes(weightCandidate as any)
+      ) {
+        context.riceWeightKg = weightCandidate;
+        context.awaitingWeightChoice = false;
+        if (context.riceBrand) context.category = context.riceBrand;
+
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
+        return enterState("ST_ProductSuggestion");
+      }
+
+      onPrompt(weightOptionsPrompt);
+      startSilenceTimer();
+      return;
+    }
+
+    if (
+      context.brandConfirmed &&
+      context.riceBrand &&
+      context.riceWeightKg == null &&
+      weightCandidate != null &&
+      allowedRiceWeights.includes(weightCandidate as any)
+    ) {
+      context.riceWeightKg = weightCandidate;
+      context.awaitingWeightChoice = false;
+      context.category = context.riceBrand;
+      onInquiryUpdate({
+        brand: context.riceBrand,
+        weightKg: context.riceWeightKg,
+        deliveryAddress: context.address,
+        deliveryDate: context.deliveryDate,
+        note: context.riceNote,
+      });
+      return enterState("ST_ProductSuggestion");
+    }
+
+    // ─────────────────────────────────────────
+    // Extract brand
+    // ─────────────────────────────────────────
+    if (brandCandidate) {
+      context.riceBrand = brandCandidate.brand;
+      context.brandConfirmed = false;
+      context.awaitingBrandConfirm = true;
+
+      // ★修正：同一発話で重さが取れているなら保持（強制クリアしない）
+      if (
+        weightCandidate != null &&
+        allowedRiceWeights.includes(weightCandidate as any)
+      ) {
+        context.riceWeightKg = weightCandidate;
+      } else {
+        context.riceWeightKg = undefined;
+      }
+
+      // 重さが入った場合、次は「銘柄確認→（YESなら即 ProductSuggestion）」へ
+      // 重さがない場合、従来通り「銘柄確認→重さ選択」へ
+      context.awaitingWeightChoice = false;
+
+      onInquiryUpdate({
+        brand: context.riceBrand,
+        weightKg: context.riceWeightKg,
+        deliveryAddress: context.address,
+        deliveryDate: context.deliveryDate,
+        note: context.riceNote,
+      });
+
+      onPrompt(`「${context.riceBrand}」でよろしいですか？`);
+      startSilenceTimer();
+      return;
+    }
+
+    // ─────────────────────────────────────────
+    // Extract weight (brand not found)
+    // ─────────────────────────────────────────
+    if (weightCandidate != null) {
+      onPrompt("銘柄を教えてください。");
+      startSilenceTimer();
+      return;
+    }
+
+    // ─────────────────────────────────────────
+    // State-specific handling
+    // ─────────────────────────────────────────
+    if (!hasInfo) {
+      if (state === "ST_RequirementCheck") {
+        if (context.noHearRetries === 0) {
+          context.noHearRetries += 1;
+          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+          startSilenceTimer();
+          return;
+        }
+        if (greetingPattern.test(normalized)) {
+          onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
+          startSilenceTimer();
+          return;
+        }
+        onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+        startSilenceTimer();
+        return;
+      }
+
+      if (state === "ST_ProductSuggestion") {
+        return;
+      }
+
+      if (state === "ST_PriceQuote") {
+        if (isYes(normalized)) return enterState("ST_AddressConfirm");
+        if (isNo(normalized)) return enterState("ST_ProductSuggestion");
+        return enterState("ST_ProductSuggestion");
+      }
+
+      if (state === "ST_AddressConfirm") {
+        if (context.awaitingAddressConfirm) {
+          if (isYes(normalized)) {
+            context.addressConfirmed = true;
+            context.awaitingAddressConfirm = false;
+            onInquiryUpdate({
+              brand: context.riceBrand,
+              weightKg: context.riceWeightKg,
+              deliveryAddress: context.address,
+              deliveryDate: context.deliveryDate,
+              note: context.riceNote,
+            });
+            return enterState("ST_DeliveryCheck");
+          }
+          if (isNo(normalized)) {
+            context.address = undefined;
+            context.addressConfirmed = false;
+            context.awaitingAddressConfirm = false;
+            onPrompt("承知いたしました。配送先のご住所をもう一度お願いします。");
+            startSilenceTimer();
+            return;
+          }
+          onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
+          startSilenceTimer();
+          return;
+        }
+
+        if (!context.address) {
+          context.address = normalized;
+          context.awaitingAddressConfirm = true;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
+          onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
+          startSilenceTimer();
+          return;
+        }
+
+        context.awaitingAddressConfirm = true;
         onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
         startSilenceTimer();
         return;
       }
-    }
 
-    if (state === "ST_DeliveryCheck") {
-      if (isYes(normalized)) {
-        return enterState("ST_OrderConfirmation");
-      }
-      if (isNo(normalized)) {
-        if (context.deliveryRetries < config.deliveryRetryMax) {
+      if (state === "ST_DeliveryCheck") {
+        // ★配送日の No を “同じ state 再 enter（=ツール再実行）” にしない
+        if (context.awaitingDeliveryCancelConfirm) {
+          if (isYes(normalized)) {
+            context.awaitingDeliveryCancelConfirm = false;
+            context.closingReason = "cancel";
+            return enterState("ST_Closing");
+          }
+          if (isNo(normalized)) {
+            context.awaitingDeliveryCancelConfirm = false;
+            // 「キャンセルしない」＝その配送日で進める
+            return enterState("ST_OrderConfirmation");
+          }
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          return;
+        }
+
+        if (isYes(normalized)) return enterState("ST_OrderConfirmation");
+        if (isNo(normalized)) {
           context.deliveryRetries += 1;
-          return enterState("ST_DeliveryCheck");
+          if (context.deliveryRetries > config.deliveryRetryMax) {
+            context.closingReason = "cancel";
+            return enterState("ST_Closing");
+          }
+          context.awaitingDeliveryCancelConfirm = true;
+          onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
+          startSilenceTimer();
+          return;
+        }
+
+        // 不明入力は同じ質問を継続（ツール再実行はしない）
+        onPrompt(`配送は${context.deliveryDate}の予定です。よろしいですか？`);
+        startSilenceTimer();
+        return;
+      }
+
+      if (state === "ST_OrderConfirmation") {
+        if (!context.customerPhone) {
+          context.customerPhone = normalized;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
+          return enterState("ST_OrderConfirmation");
+        }
+
+        if (isYes(normalized)) {
+          return handleSaveOrder();
         }
         context.closingReason = "cancel";
         return enterState("ST_Closing");
       }
-      return enterState("ST_DeliveryCheck");
-    }
 
-    if (state === "ST_OrderConfirmation") {
-      if (!context.customerPhone) {
-        context.customerPhone = normalized;
-        onInquiryUpdate({
-          brand: context.riceBrand,
-          weightKg: context.riceWeightKg,
-          deliveryAddress: context.address,
-          deliveryDate: context.deliveryDate,
-          note: context.riceNote,
-        });
-        return enterState("ST_OrderConfirmation");
-      }
-      if (isYes(normalized)) {
-        return handleSaveOrder();
-      }
-      context.closingReason = "cancel";
-      return enterState("ST_Closing");
+      onLog("transcript.noinfo", { text: normalized, state });
+      return;
     }
   };
 
   const handleSaveOrder = async () => {
-    if (!context.product || !context.price || !context.deliveryDate || !context.customerPhone) {
+    if (
+      !context.product ||
+      context.price == null ||
+      !context.deliveryDate ||
+      !context.customerPhone
+    ) {
       context.closingReason = "error";
       return enterState("ST_Closing");
     }
+
     const payload = {
       productId: context.product.id,
       price: context.price,
@@ -801,6 +1134,7 @@ export const createConversationController = ({
       customerPhone: context.customerPhone,
       timestamp: new Date().toISOString(),
     };
+
     try {
       const result = await toolClient.saveOrder(payload);
       context.orderId = result.orderId;
@@ -820,38 +1154,64 @@ export const createConversationController = ({
 
   return {
     start: () => enterState("ST_Greeting"),
+
     onUserTranscript: (text: string, confidence: number | null) =>
       handleUserTranscript(text, confidence),
+
     onUserCommitted: () => {
       waitingForCommit = false;
       clearTimers();
+      void exitGreetingIfNeeded();
     },
+
     onSpeechStarted: () => {
       waitingForCommit = true;
       if (silenceTimer) clearTimeout(silenceTimer);
       if (noHearTimer) clearTimeout(noHearTimer);
     },
+
     onSpeechStopped: () => {
       if (!waitingForCommit && config.noHearAutoPromptEnabled) {
         startNoHearTimer();
       }
     },
+
     onAssistantStart: () => {
       clearTimers();
     },
-    onAssistantDone: () => {
-      if (state !== "ST_Closing" && config.silenceAutoPromptEnabled && !waitingForCommit) {
+
+    onAssistantDone: (_completedPrompt?: string) => {
+      if (state === "ST_Greeting") {
+        void exitGreetingIfNeeded().catch((err) =>
+          onLog("state.transition.failed", err)
+        );
+        return;
+      }
+      if (state === "ST_ProductSuggestion") {
+        void enterState("ST_StockCheck").catch((err) =>
+          onLog("state.transition.failed", err)
+        );
+        return;
+      }
+      if (
+        state !== "ST_Closing" &&
+        config.silenceAutoPromptEnabled &&
+        !waitingForCommit
+      ) {
         startSilenceTimer();
       }
     },
+
     setCustomerPhone: (phone?: string) => {
       if (!phone) return;
       context.customerPhone = phone;
     },
+
     setAddress: (address?: string) => {
       if (!address) return;
       context.address = address;
     },
+
     getState: () => state,
     getContext: () => ({ ...context }),
   };

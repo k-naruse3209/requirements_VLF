@@ -44,65 +44,108 @@ const makeController = () => {
   return { controller, prompts };
 };
 
+const bootstrap = async (controller: ReturnType<typeof makeController>["controller"]) => {
+  await controller.start();
+  controller.onAssistantDone();
+  await nextTick();
+};
+
 const runCase = async (label: string, text: string, assertFn: (state: string, ctx: any) => void) => {
   const { controller } = makeController();
-  await controller.start();
+  await bootstrap(controller);
   await controller.onUserTranscript(text, 0.9);
   await nextTick();
   assertFn(controller.getState(), controller.getContext());
   console.log("ok", label);
 };
 
+const runSequence = async (
+  label: string,
+  texts: string[],
+  assertFn: (state: string, ctx: any) => void
+) => {
+  const { controller } = makeController();
+  await bootstrap(controller);
+  for (const text of texts) {
+    await controller.onUserTranscript(text, 0.9);
+    await nextTick();
+  }
+  assertFn(controller.getState(), controller.getContext());
+  console.log("ok", label);
+};
+
 (async () => {
-  assert.equal(extractRiceBrand("コシヒカリ"), "コシヒカリ");
-  assert.equal(extractRiceBrand("こしひかり"), "コシヒカリ");
+  assert.equal(extractRiceBrand("コシヒカリ")?.brand, "コシヒカリ");
+  assert.equal(extractRiceBrand("こしひかり")?.brand, "コシヒカリ");
   assert.equal(extractWeightKg("5kg"), 5);
   assert.equal(extractWeightKg("五キロ"), 5);
 
-  await runCase("case1: コシヒカリ 5kg", "コシヒカリ 5kg", (state, ctx) => {
+  await runSequence("case1: コシヒカリ confirm + weight", ["コシヒカリ 5kg", "はい", "10kg"], (state, ctx) => {
     assert.equal(ctx.riceBrand, "コシヒカリ");
-    assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
-  });
-
-  await runCase("case2: こしひかりを五キロ", "こしひかりを五キロ", (state, ctx) => {
-    assert.equal(ctx.riceBrand, "コシヒカリ");
-    assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
-  });
-
-  await runCase("case3: はい", "はい", (state, ctx) => {
-    assert.equal(ctx.riceBrand, undefined);
-    assert.equal(ctx.riceWeightKg, undefined);
-    assert.equal(state, "ST_Greeting");
-  });
-
-  await runCase("case4: えっと…コシ… 5", "えっと…コシ… 5キロ", (state, ctx) => {
-    assert.equal(ctx.riceBrand, "コシヒカリ");
-    assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
-  });
-
-  await runCase("case5: 10トン", "10トン", (state, ctx) => {
-    assert.equal(ctx.riceWeightKg, undefined);
-    assert.equal(state, "ST_Greeting");
-  });
-
-  await runCase("case6: あきたこまち 10キロ", "あきたこまち 10キロ", (state, ctx) => {
-    assert.equal(ctx.riceBrand, "あきたこまち");
     assert.equal(ctx.riceWeightKg, 10);
     assert.equal(state, "ST_ProductSuggestion");
   });
 
+  await runSequence(
+    "case1b: コシヒカリ weight without yes",
+    ["コシヒカリ 5kg", "10kg"],
+    (state, ctx) => {
+      assert.equal(ctx.riceBrand, "コシヒカリ");
+      assert.equal(ctx.riceWeightKg, 10);
+      assert.equal(state, "ST_ProductSuggestion");
+    }
+  );
+
+  await runSequence(
+    "case2: こしひかりを五キロ confirm + weight",
+    ["こしひかりを五キロ", "はい", "5kg"],
+    (state, ctx) => {
+      assert.equal(ctx.riceBrand, "コシヒカリ");
+      assert.equal(ctx.riceWeightKg, 5);
+      assert.equal(state, "ST_ProductSuggestion");
+    }
+  );
+
+  await runCase("case3: はい", "はい", (state, ctx) => {
+    assert.equal(ctx.riceBrand, undefined);
+    assert.equal(ctx.riceWeightKg, undefined);
+    assert.equal(state, "ST_RequirementCheck");
+  });
+
+  await runSequence(
+    "case4: えっと…コシ… 5 confirm + weight",
+    ["えっと…コシ… 5キロ", "はい", "10kg"],
+    (state, ctx) => {
+      assert.equal(ctx.riceBrand, "コシヒカリ");
+      assert.equal(ctx.riceWeightKg, 10);
+      assert.equal(state, "ST_ProductSuggestion");
+    }
+  );
+
+  await runCase("case5: 10トン", "10トン", (state, ctx) => {
+    assert.equal(ctx.riceWeightKg, undefined);
+    assert.equal(state, "ST_RequirementCheck");
+  });
+
+  await runSequence(
+    "case6: あきたこまち 10キロ confirm + weight",
+    ["あきたこまち 10キロ", "はい", "20kg"],
+    (state, ctx) => {
+      assert.equal(ctx.riceBrand, "あきたこまち");
+      assert.equal(ctx.riceWeightKg, 20);
+      assert.equal(state, "ST_ProductSuggestion");
+    }
+  );
+
   await runCase("case7: ゆめぴりか 0.5kg", "ゆめぴりか 0.5kg", (state, ctx) => {
     assert.equal(ctx.riceBrand, "ゆめぴりか");
     assert.equal(ctx.riceWeightKg, undefined);
-    assert.equal(state, "ST_Greeting");
+    assert.equal(state, "ST_RequirementCheck");
   });
 
   await runCase("case8: 5kg", "5kg", (state, ctx) => {
     assert.equal(ctx.riceBrand, undefined);
-    assert.equal(ctx.riceWeightKg, 5);
+    assert.equal(ctx.riceWeightKg, undefined);
     assert.equal(state, "ST_RequirementCheck");
   });
 
@@ -114,7 +157,7 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
 
   await runCase("case10: はい 5kg", "はい 5kg", (state, ctx) => {
     assert.equal(ctx.riceBrand, undefined);
-    assert.equal(ctx.riceWeightKg, 5);
+    assert.equal(ctx.riceWeightKg, undefined);
     assert.equal(state, "ST_RequirementCheck");
   });
 
