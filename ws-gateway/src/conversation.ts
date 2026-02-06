@@ -306,6 +306,21 @@ export const extractWeightKg = (text: string) => {
   return null;
 };
 
+const extractLooseWeightKg = (text: string) => {
+  const normalized = normalizeRiceText(text);
+  const digitMatch = normalized.match(/(?:^|[^0-9])([0-9]{1,2})(?:$|[^0-9])/);
+  if (digitMatch?.[1]) {
+    const value = Number(digitMatch[1]);
+    if (Number.isFinite(value)) return value;
+  }
+  const kanjiMatch = normalized.match(/([一二三四五六七八九十零]{1,3})/);
+  if (kanjiMatch?.[1]) {
+    const value = parseKanjiNumber(kanjiMatch[1]);
+    if (value != null) return value;
+  }
+  return null;
+};
+
 const isValidWeightKg = (value: number | null) => {
   if (value == null) return false;
   if (!Number.isFinite(value)) return false;
@@ -493,9 +508,9 @@ export const createConversationController = ({
           note: context.riceNote,
         });
 
-        onPrompt(
-          `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。こちらで登録しました。`
-        );
+        const prompt = `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。こちらで登録しました。`;
+        onLog("productsuggestion.prompt", { prompt });
+        onPrompt(prompt);
         break;
       }
 
@@ -760,7 +775,17 @@ export const createConversationController = ({
     }
 
     // 米関連の抽出
-    const weightCandidate = extractWeightKg(normalized);
+    let weightCandidate = extractWeightKg(normalized);
+    if (
+      weightCandidate == null &&
+      (context.awaitingWeightChoice || context.awaitingBrandConfirm)
+    ) {
+      const loose = extractLooseWeightKg(normalized);
+      if (loose != null) {
+        weightCandidate = loose;
+        onLog("weight.loose_match", { text: normalized, weightKg: loose });
+      }
+    }
     const brandCandidate = extractRiceBrand(normalized);
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
 
@@ -865,6 +890,27 @@ export const createConversationController = ({
       onPrompt(weightOptionsPrompt);
       startSilenceTimer();
       return;
+    }
+
+    // brand は既に確定済みだが awaitingWeightChoice が外れてしまったケースの救済
+    if (
+      context.brandConfirmed &&
+      context.riceBrand &&
+      context.riceWeightKg == null &&
+      weightCandidate != null &&
+      allowedRiceWeights.includes(weightCandidate as any)
+    ) {
+      context.riceWeightKg = weightCandidate;
+      context.awaitingWeightChoice = false;
+      context.category = context.riceBrand;
+      onInquiryUpdate({
+        brand: context.riceBrand,
+        weightKg: context.riceWeightKg,
+        deliveryAddress: context.address,
+        deliveryDate: context.deliveryDate,
+        note: context.riceNote,
+      });
+      return enterState("ST_ProductSuggestion");
     }
 
     // ─────────────────────────────────────────
@@ -1088,9 +1134,21 @@ export const createConversationController = ({
       clearTimers();
     },
 
-    onAssistantDone: () => {
+    onAssistantDone: (completedPrompt?: string) => {
       if (state === "ST_Greeting") {
         void exitGreetingIfNeeded().catch((err) =>
+          onLog("state.transition.failed", err)
+        );
+        return;
+      }
+      if (state === "ST_ProductSuggestion") {
+        if (!completedPrompt) {
+          onLog("productsuggestion.defer_address", {
+            reason: "missing completedPrompt",
+          });
+          return;
+        }
+        void enterState("ST_AddressConfirm").catch((err) =>
           onLog("state.transition.failed", err)
         );
         return;

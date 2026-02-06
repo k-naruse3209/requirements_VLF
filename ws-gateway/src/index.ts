@@ -260,6 +260,7 @@ wss.on("connection", (ws: WebSocket) => {
   let mediaCount = 0;
   let realtime: WebSocket | null = null;
   let realtimeReady = false;
+  let sessionConfigured = false;
   let hasBufferedAudio = false;
   let responseActive = false;
   let responsePending = false;
@@ -269,7 +270,7 @@ wss.on("connection", (ws: WebSocket) => {
   let bufferedSamples = 0;
   let commitPending = false;
   let commitTimer: NodeJS.Timeout | null = null;
-  let queuedPrompt: string | null = null;
+  const promptQueue: string[] = [];
   let conversationStarted = false;
   let stopReceived = false;
   let callLogId: string | null = null;
@@ -453,8 +454,10 @@ wss.on("connection", (ws: WebSocket) => {
   const createResponse = (instructions?: string) => {
     if (!instructions) return;
     if (responseActive || responsePending) {
-      queuedPrompt = instructions;
-      console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
+      promptQueue.push(instructions);
+      console.log(`${logPrefix(wsId)} queue response.create (active/pending)`, {
+        queued: promptQueue.length,
+      });
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
@@ -516,8 +519,41 @@ wss.on("connection", (ws: WebSocket) => {
 
   const processCommittedTurn = () => {
     const now = Date.now();
-    if (!commitPending && (!lastCommitAt || now > awaitingTranscriptUntil)) return;
     if (!pendingTranscript) return;
+    if (!commitPending) {
+      if (!lastCommitAt) {
+        const ageMs = now - pendingTranscript.ts;
+        if (ageMs > 8000) {
+          console.log(`${logPrefix(wsId)} skip transcript (no commit timeout)`, {
+            text: pendingTranscript.text,
+            ageMs,
+          });
+          pendingTranscript = null;
+        } else {
+          console.log(`${logPrefix(wsId)} wait transcript (before commit)`, {
+            text: pendingTranscript.text,
+            ageMs,
+          });
+        }
+        return;
+      }
+      const commitAgeMs = now - lastCommitAt;
+      const lateAcceptWindowMs = Math.max(transcriptWaitMs * 4, 8000);
+      if (commitAgeMs > lateAcceptWindowMs) {
+        console.log(`${logPrefix(wsId)} skip transcript (stale commit)`, {
+          text: pendingTranscript.text,
+          commitAgeMs,
+        });
+        pendingTranscript = null;
+        return;
+      }
+      if (commitAgeMs > transcriptWaitMs) {
+        console.log(`${logPrefix(wsId)} accept transcript (late)`, {
+          text: pendingTranscript.text,
+          commitAgeMs,
+        });
+      }
+    }
     const transcript = pendingTranscript;
     pendingTranscript = null;
     commitPending = false;
@@ -644,7 +680,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   const maybeStartConversation = () => {
     if (conversationStarted) return;
-    if (!realtimeReady || !streamSid) return;
+    if (!realtimeReady || !streamSid || !sessionConfigured) return;
     conversationStarted = true;
     conversation.start();
   };
@@ -711,7 +747,6 @@ wss.on("connection", (ws: WebSocket) => {
       logOutgoing("session.update", payload);
       sendToRealtime(payload);
       console.log(`${logPrefix(wsId)} realtime connected`);
-      maybeStartConversation();
     });
 
     realtime.on("message", (data, isBinary) => {
@@ -759,6 +794,12 @@ wss.on("connection", (ws: WebSocket) => {
       }
       const userTranscript = extractUserTranscript(payload);
       if (userTranscript) {
+        console.log(`${logPrefix(wsId)} transcript.received`, {
+          text: userTranscript.text,
+          confidence: userTranscript.confidence,
+          commitPending,
+          commitAgeMs: lastCommitAt ? Date.now() - lastCommitAt : null,
+        });
         pendingTranscript = { ...userTranscript, ts: Date.now() };
         processCommittedTurn();
       }
@@ -771,6 +812,7 @@ wss.on("connection", (ws: WebSocket) => {
       }
       if (payload.type === "session.updated") {
         validateSession(payload);
+        sessionConfigured = true;
         // Ensure greeting is sent after session is fully configured.
         maybeStartConversation();
       }
@@ -890,6 +932,7 @@ wss.on("connection", (ws: WebSocket) => {
         flushAssistantTranscript();
       }
       if (payload.type === "response.done") {
+        const completedPrompt = lastAssistantPrompt;
         logServerEvent(payload, {
           lastInputEvent: lastInputEvent?.type,
           lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
@@ -898,15 +941,14 @@ wss.on("connection", (ws: WebSocket) => {
         responsePending = false;
         lastAssistantDoneAt = Date.now();
         flushAssistantTranscript();
-        conversation.onAssistantDone();
+        conversation.onAssistantDone(completedPrompt);
         if (queuedUserTranscript) {
           const queued = queuedUserTranscript;
           queuedUserTranscript = null;
           conversation.onUserTranscript(queued.text, queued.confidence);
         }
-        if (queuedPrompt) {
-          const pending = queuedPrompt;
-          queuedPrompt = null;
+        if (promptQueue.length > 0) {
+          const pending = promptQueue.shift();
           createResponse(pending);
         }
         if (lastOutputItemId) {
@@ -917,12 +959,12 @@ wss.on("connection", (ws: WebSocket) => {
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
-        if (responseActive || responsePending) {
+        if (config.bargeInCancelEnabled && (responseActive || responsePending)) {
           logOutgoing("response.cancel", { type: "response.cancel" });
           sendToRealtime({ type: "response.cancel" });
           responseActive = false;
           responsePending = false;
-          queuedPrompt = null;
+          promptQueue.length = 0;
         }
         conversation.onSpeechStarted();
       }
@@ -997,6 +1039,15 @@ wss.on("connection", (ws: WebSocket) => {
         }
         updateBytesWindow(Buffer.byteLength(event.media.payload, "base64"));
         if (realtimeReady) {
+          if (!sessionConfigured) {
+            if (mediaCount <= 5 || mediaCount % 100 === 0) {
+              console.log(
+                `${logPrefix(wsId)} drop media until session configured`,
+                { mediaCount }
+              );
+            }
+            break;
+          }
           if (useAudioSchema) {
             if (audioMode === "pcmu") {
               sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
