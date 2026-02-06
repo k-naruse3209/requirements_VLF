@@ -152,8 +152,19 @@ const riceBrandDictionary: Record<string, string[]> = {
   ななつぼし: ["ななつぼし", "七つ星", "ななつ"],
 };
 
-const allowedRiceWeights = [5, 10, 20] as const;
-const weightOptionsPrompt = "5kg、10kg、20kgがあります。この中からお選びください。";
+const defaultRiceWeights = [5, 10, 20];
+
+const buildWeightPrompt = (weights: number[]) =>
+  `${weights.map((weight) => `${weight}kg`).join("、")}があります。この中からお選びください。`;
+
+const extractCatalogWeightKg = (name: string): number | null => {
+  const normalized = name.normalize("NFKC");
+  const match = normalized.match(/(\d+(?:\.\d+)?)\s*(?:kg|キロ)/i);
+  if (!match?.[1]) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return value;
+};
 
 const normalizeBrandText = (text: string) => {
   const normalized = normalizeRiceText(text);
@@ -326,7 +337,6 @@ const pickProduct = (
   );
   return categoryMatch || catalog.find((item) => !excludeIds.includes(item.id));
 };
-
 export const createConversationController = ({
   catalog,
   toolClient,
@@ -365,6 +375,29 @@ export const createConversationController = ({
     awaitingWeightChoice: false,
     awaitingMillingChoice: false,
     brandConfirmed: false,
+  };
+
+  const allowedRiceWeights = (() => {
+    const set = new Set<number>();
+    for (const item of catalog) {
+      const weight = extractCatalogWeightKg(item.name);
+      if (weight != null && Number.isInteger(weight) && isValidWeightKg(weight)) {
+        set.add(weight);
+      }
+    }
+    return set.size > 0
+      ? Array.from(set).sort((a, b) => a - b)
+      : [...defaultRiceWeights];
+  })();
+  const weightOptionsPrompt = buildWeightPrompt(allowedRiceWeights);
+
+  const selectRiceProduct = (brand: string, weightKg: number) => {
+    const normalizedBrand = normalizeRiceText(brand);
+    return catalog.find((item) => {
+      const category = normalizeRiceText(item.category || "");
+      const itemWeight = extractCatalogWeightKg(item.name);
+      return category === normalizedBrand && itemWeight === weightKg;
+    });
   };
 
   const clearTimers = () => {
@@ -438,18 +471,20 @@ export const createConversationController = ({
         if (!context.riceBrand || !context.riceWeightKg) {
           return enterState("ST_RequirementCheck");
         }
-
-        // category の使い方は「銘柄=カテゴリ」で継続（必要なら別ロジックに置換）
+        // category は銘柄で固定し、重さ一致SKUを優先
         context.category = context.riceBrand;
-
-        const picked = pickProduct(catalog, context.category, context.suggestedProductIds);
+        const picked =
+          selectRiceProduct(context.riceBrand, context.riceWeightKg) ||
+          pickProduct(catalog, context.category, context.suggestedProductIds);
         if (!picked) {
           context.closingReason = "error";
           onPrompt("該当商品が見つかりませんでした。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing");
         }
         context.product = picked;
-
+        if (context.product.description) {
+          context.riceNote = context.product.description;
+        }
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -877,6 +912,12 @@ export const createConversationController = ({
     // ─────────────────────────────────────────
     if (!hasInfo) {
       if (state === "ST_RequirementCheck") {
+        if (context.noHearRetries === 0) {
+          context.noHearRetries += 1;
+          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+          startSilenceTimer();
+          return;
+        }
         if (greetingPattern.test(normalized)) {
           onPrompt("はい、聞こえています。お米の銘柄と量を教えてください。");
           startSilenceTimer();

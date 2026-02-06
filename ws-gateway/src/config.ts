@@ -5,7 +5,7 @@ const defaultCatalogPath = path.join(process.cwd(), "catalog.json");
 export const config = {
   port: Number(process.env.WS_PORT || 8080),
   realtimeUrl: process.env.REALTIME_URL || "wss://api.openai.com/v1/realtime",
-  realtimeModel: process.env.REALTIME_MODEL || "gpt-4o-realtime-preview",
+  realtimeModel: process.env.REALTIME_MODEL || "gpt-realtime",
   openaiApiKey: process.env.OPENAI_API_KEY || "",
   testPrompt: process.env.TEST_PROMPT || "",
   realtimeBetaHeader: process.env.REALTIME_BETA_HEADER !== "0",

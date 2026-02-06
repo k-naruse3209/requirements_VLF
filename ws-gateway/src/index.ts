@@ -58,7 +58,9 @@ const extractUserTranscript = (
       (payload as { text?: string }).text;
     const confidence = (payload as { confidence?: number }).confidence;
     if (typeof text === "string" && text.trim()) {
-      return { text, confidence: Number.isFinite(confidence) ? confidence : null };
+      const parsedConfidence =
+        typeof confidence === "number" && Number.isFinite(confidence) ? confidence : null;
+      return { text, confidence: parsedConfidence };
     }
   }
   if (payload.type === "conversation.item.input_audio_transcription.completed") {
@@ -171,11 +173,31 @@ const loadCatalog = (): Product[] => {
   return [];
 };
 
+const summarizeCatalog = (catalog: Product[]) => {
+  const weights = new Set<number>();
+  const brands = new Set<string>();
+  for (const item of catalog) {
+    if (item.category) brands.add(item.category);
+    const match = item.name.normalize("NFKC").match(/(\d+(?:\.\d+)?)\s*(?:kg|キロ)/i);
+    if (match?.[1]) {
+      const weight = Number(match[1]);
+      if (Number.isFinite(weight)) weights.add(weight);
+    }
+  }
+  return {
+    brands: Array.from(brands).sort(),
+    weightsKg: Array.from(weights).sort((a, b) => a - b),
+  };
+};
+
 const productCatalog = loadCatalog();
 if (config.productCatalogPath) {
+  const summary = summarizeCatalog(productCatalog);
   console.log("[catalog] loaded", {
     count: productCatalog.length,
     path: config.productCatalogPath,
+    brands: summary.brands,
+    weightsKg: summary.weightsKg,
   });
 } else {
   console.warn("[catalog] no PRODUCT_CATALOG_PATH configured");
