@@ -494,11 +494,9 @@ export const createConversationController = ({
         });
 
         onPrompt(
-          `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。おすすめは「${context.product.name}」です。在庫と価格を確認します。`
+          `かしこまりました。${context.riceBrand}${context.riceWeightKg}kgですね。こちらで登録しました。`
         );
-
-        // 次へ
-        return enterState("ST_StockCheck");
+        break;
       }
 
       case "ST_StockCheck": {
@@ -898,10 +896,6 @@ export const createConversationController = ({
     // Extract weight (brand not found)
     // ─────────────────────────────────────────
     if (weightCandidate != null) {
-      // ★ここも改善：重さは保持して次の質問へ
-      if (isValidWeightKg(weightCandidate)) {
-        context.riceWeightKg = weightCandidate;
-      }
       onPrompt("銘柄を教えてください。");
       startSilenceTimer();
       return;
@@ -1023,12 +1017,6 @@ export const createConversationController = ({
       }
 
       // その他：情報なしは軽く促す（元ロジック踏襲）
-      if (state === "ST_RequirementCheck") {
-        onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
-        startSilenceTimer();
-        return;
-      }
-
       onLog("transcript.noinfo", { text: normalized, state });
       return;
     }
