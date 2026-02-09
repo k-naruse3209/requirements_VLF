@@ -315,6 +315,11 @@ wss.on("connection", (ws: WebSocket) => {
   let lastTimeoutTriggeredAt = 0;
   let responseSeq = 0;
   const pendingResponseRequests = new Map<string, { ts: number; prompt: string }>();
+  let cancelInFlight = false;
+  let cancelRequestedAt = 0;
+  let bargeInCancelTimer: NodeJS.Timeout | null = null;
+  const cancelDedupWindowMs = 1200;
+  const bargeInCancelFallbackMs = 180;
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
@@ -455,6 +460,8 @@ wss.on("connection", (ws: WebSocket) => {
     "conversation.item.created",
     "conversation.item.input_audio_transcription.completed",
     "response.created",
+    "response.cancelled",
+    "response.canceled",
     "response.done",
     "error",
   ]);
@@ -649,6 +656,74 @@ wss.on("connection", (ws: WebSocket) => {
     );
   };
 
+  const clearPendingBargeInCancel = () => {
+    if (!bargeInCancelTimer) return;
+    clearTimeout(bargeInCancelTimer);
+    bargeInCancelTimer = null;
+  };
+
+  const sendTwilioClear = (reason: string) => {
+    if (!streamSid) return false;
+    ws.send(
+      JSON.stringify({
+        event: "clear",
+        streamSid,
+      })
+    );
+    console.log(`${logPrefix(wsId)} twilio clear`, { reason, streamSid });
+    return true;
+  };
+
+  const requestResponseCancel = (reason: string, force = false) => {
+    const now = Date.now();
+    if (!force && !(responseActive || responsePending)) {
+      console.log(`${logPrefix(wsId)} response.cancel skipped`, {
+        reason,
+        responseActive,
+        responsePending,
+      });
+      return false;
+    }
+    if (cancelInFlight && now - cancelRequestedAt < cancelDedupWindowMs) {
+      console.log(`${logPrefix(wsId)} response.cancel deduped`, {
+        reason,
+        sinceMs: now - cancelRequestedAt,
+      });
+      return false;
+    }
+    cancelInFlight = true;
+    cancelRequestedAt = now;
+    logOutgoing("response.cancel", { type: "response.cancel" });
+    sendToRealtime({ type: "response.cancel" });
+    return true;
+  };
+
+  const scheduleBargeInCancelFallback = (source: string) => {
+    if (!config.bargeInCancelEnabled) return false;
+    if (!(responseActive || responsePending)) return false;
+    clearPendingBargeInCancel();
+    bargeInCancelTimer = setTimeout(() => {
+      bargeInCancelTimer = null;
+      if (!(responseActive || responsePending)) return;
+      requestResponseCancel(`${source}:fallback`);
+    }, bargeInCancelFallbackMs);
+    return true;
+  };
+
+  const handleBargeIn = (source: string) => {
+    const clearSent = sendTwilioClear(source);
+    promptQueue.length = 0;
+    queuedUserTranscript = null;
+    const fallbackScheduled = scheduleBargeInCancelFallback(source);
+    console.log(`${logPrefix(wsId)} bargein`, {
+      source,
+      clearSent,
+      fallbackScheduled,
+      responseActive,
+      responsePending,
+    });
+  };
+
   if (!config.openaiApiKey) {
     console.error(`${logPrefix(wsId)} missing OPENAI_API_KEY`);
     ws.close();
@@ -811,6 +886,10 @@ wss.on("connection", (ws: WebSocket) => {
         if (error?.code === "conversation_already_has_active_response") {
           responsePending = false;
         }
+        if (error?.code === "response_cancel_not_active") {
+          cancelInFlight = false;
+          clearPendingBargeInCancel();
+        }
         logServerEvent(payload, {
           lastInputEvent: lastInputEvent?.type,
           lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
@@ -937,10 +1016,8 @@ wss.on("connection", (ws: WebSocket) => {
             id: (payload as { response_id?: string }).response_id,
             clientRequestId,
           });
-          logOutgoing("response.cancel", { type: "response.cancel" });
-          sendToRealtime({ type: "response.cancel" });
-          responseActive = false;
-          responsePending = false;
+          handleBargeIn("unexpected_response_created");
+          requestResponseCancel("unexpected_response_created", true);
           return;
         }
         responseActive = true;
@@ -963,6 +1040,8 @@ wss.on("connection", (ws: WebSocket) => {
         });
         responseActive = false;
         responsePending = false;
+        cancelInFlight = false;
+        clearPendingBargeInCancel();
         lastAssistantDoneAt = Date.now();
         flushAssistantTranscript();
         conversation.onAssistantDone(completedPrompt);
@@ -982,14 +1061,25 @@ wss.on("connection", (ws: WebSocket) => {
           });
         }
       }
-      if (payload.type === "input_audio_buffer.speech_started") {
-        if (config.bargeInCancelEnabled && (responseActive || responsePending)) {
-          logOutgoing("response.cancel", { type: "response.cancel" });
-          sendToRealtime({ type: "response.cancel" });
-          responseActive = false;
-          responsePending = false;
-          promptQueue.length = 0;
+      if (payload.type === "response.cancelled" || payload.type === "response.canceled") {
+        logServerEvent(payload, {
+          lastInputEvent: lastInputEvent?.type,
+          lastInputEventAgeMs: lastInputEvent ? Date.now() - lastInputEvent.at : null,
+        });
+        responseActive = false;
+        responsePending = false;
+        cancelInFlight = false;
+        clearPendingBargeInCancel();
+        lastAssistantDoneAt = Date.now();
+        flushAssistantTranscript();
+        if (queuedUserTranscript) {
+          const queued = queuedUserTranscript;
+          queuedUserTranscript = null;
+          conversation.onUserTranscript(queued.text, queued.confidence);
         }
+      }
+      if (payload.type === "input_audio_buffer.speech_started") {
+        handleBargeIn("speech_started");
         conversation.onSpeechStarted();
       }
       if (payload.type === "input_audio_buffer.speech_stopped") {
@@ -1135,6 +1225,7 @@ wss.on("connection", (ws: WebSocket) => {
   });
 
   ws.on("close", (code, reason) => {
+    clearPendingBargeInCancel();
     console.log(`${logPrefix(wsId)} disconnected`, {
       code,
       reason: reason.toString(),
