@@ -247,6 +247,7 @@ wss.on("connection", (ws: WebSocket) => {
   let cancelInFlight = false;
   let cancelRequestedAt = 0;
   let bargeInCancelTimer: NodeJS.Timeout | null = null;
+  let lastTwilioAudioSentAt = 0;
   const cancelDedupWindowMs = 1200;
   const bargeInCancelFallbackMs = 180;
 
@@ -270,6 +271,7 @@ wss.on("connection", (ws: WebSocket) => {
       audioMode === "pcmu"
         ? "inbound passthrough / outbound enforced pcmu@8k"
         : `inbound pcmu->pcm16@${outputSampleRate} / outbound pcm16->pcmu@8k`,
+    interruptResponse: config.realtimeInterruptResponse,
   });
 
   const sendToRealtime = (payload: object) => {
@@ -426,12 +428,17 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
+    const verbatimResponseOverrides = config.realtimeVerbatimEnabled
+      ? {
+          conversation: "none" as const,
+          max_output_tokens: config.realtimeMaxResponseOutputTokens,
+        }
+      : {};
     const payload = useAudioSchema
       ? {
           type: "response.create",
           response: {
-            conversation: "none",
-            max_output_tokens: config.realtimeMaxResponseOutputTokens,
+            ...verbatimResponseOverrides,
             audio: {
               output: {
                 format: {
@@ -448,8 +455,7 @@ wss.on("connection", (ws: WebSocket) => {
       : {
           type: "response.create",
           response: {
-            conversation: "none",
-            max_output_tokens: config.realtimeMaxResponseOutputTokens,
+            ...verbatimResponseOverrides,
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
@@ -612,6 +618,7 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     sendToTwilio(twilioPayload);
+    lastTwilioAudioSentAt = Date.now();
   };
 
   const clearPendingBargeInCancel = () => {
@@ -669,13 +676,22 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const handleBargeIn = (source: string) => {
-    const clearSent = sendTwilioClear(source);
+    const sinceLastAudioMs = lastTwilioAudioSentAt
+      ? Date.now() - lastTwilioAudioSentAt
+      : Number.POSITIVE_INFINITY;
+    const shouldClear =
+      responseActive ||
+      responsePending ||
+      sinceLastAudioMs <= config.bargeInTwilioClearWindowMs;
+    const clearSent = shouldClear ? sendTwilioClear(source) : false;
     promptQueue.length = 0;
     queuedUserTranscript = null;
     const fallbackScheduled = scheduleBargeInCancelFallback(source);
     console.log(`${logPrefix(wsId)} bargein`, {
       source,
+      shouldClear,
       clearSent,
+      sinceLastAudioMs,
       fallbackScheduled,
       responseActive,
       responsePending,
@@ -748,6 +764,9 @@ wss.on("connection", (ws: WebSocket) => {
         ws.close();
         return;
       }
+      const sessionMaxResponseTokens = config.realtimeVerbatimEnabled
+        ? config.realtimeMaxResponseOutputTokens
+        : "inf";
       const inputAudio = {
         format: {
           type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm",
@@ -758,7 +777,7 @@ wss.on("connection", (ws: WebSocket) => {
           type: "server_vad",
           silence_duration_ms: 800,
           create_response: false,
-          interrupt_response: true,
+          interrupt_response: config.realtimeInterruptResponse,
         },
       };
       const payload = useAudioSchema
@@ -768,7 +787,7 @@ wss.on("connection", (ws: WebSocket) => {
               type: "realtime",
               instructions: config.realtimeInstructions,
               temperature: config.realtimeTemperature,
-              max_response_output_tokens: config.realtimeMaxResponseOutputTokens,
+              max_response_output_tokens: sessionMaxResponseTokens,
               audio: {
                 input: inputAudio,
                 output: {
@@ -787,7 +806,7 @@ wss.on("connection", (ws: WebSocket) => {
           session: {
             instructions: config.realtimeInstructions,
               temperature: config.realtimeTemperature,
-              max_response_output_tokens: config.realtimeMaxResponseOutputTokens,
+              max_response_output_tokens: sessionMaxResponseTokens,
             input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
@@ -797,7 +816,7 @@ wss.on("connection", (ws: WebSocket) => {
               type: "server_vad",
               silence_duration_ms: 800,
               create_response: false,
-              interrupt_response: true,
+              interrupt_response: config.realtimeInterruptResponse,
             },
           },
         };
@@ -1011,7 +1030,14 @@ wss.on("connection", (ws: WebSocket) => {
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
-        handleBargeIn("speech_started");
+        if (config.realtimeInterruptResponse) {
+          handleBargeIn("speech_started");
+        } else {
+          console.log(`${logPrefix(wsId)} bargein skipped`, {
+            source: "speech_started",
+            reason: "REALTIME_INTERRUPT_RESPONSE=0",
+          });
+        }
         conversation.onSpeechStarted();
       }
       if (payload.type === "input_audio_buffer.speech_stopped") {
