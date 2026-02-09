@@ -32,9 +32,9 @@ stateDiagram-v2
     ST_AddressConfirm --> EX_NoHear: 聞き取り失敗
     ST_OrderConfirmation --> EX_NoHear: 聞き取り失敗
 
-    ST_ProductSuggestion --> EX_Correction: 言い直し要求
-    ST_AddressConfirm --> EX_Correction: 言い直し要求
-    ST_OrderConfirmation --> EX_Correction: 言い直し要求
+    ST_ProductSuggestion --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_AddressConfirm --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_OrderConfirmation --> ST_RequirementCheck: 言い直しキーワード（内部補正）
 
     EX_Silence --> ST_Closing: リトライ上限
     EX_Silence --> ST_Greeting: リトライ継続
@@ -51,8 +51,6 @@ stateDiagram-v2
     EX_NoHear --> ST_AddressConfirm: 再確認
     EX_NoHear --> ST_OrderConfirmation: 再確認
 
-    EX_Correction --> ST_RequirementCheck: 要件から再開
-    EX_Correction --> ST_AddressConfirm: 住所確認から再開
 ```
 
 ---
@@ -126,7 +124,7 @@ stateDiagram-v2
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗）
 - EX_Silence（無音）
-- EX_Correction（「やっぱり別の商品で」→ ST_RequirementCheck）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 
 **次状態**: ST_StockCheck
 
@@ -178,7 +176,7 @@ stateDiagram-v2
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗）
 - EX_Silence（無音）
-- EX_Correction（「違う住所で」→ ST_AddressConfirm）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 
 **次状態**: ST_DeliveryCheck
 
@@ -226,7 +224,7 @@ stateDiagram-v2
 
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗 → 再度確認）
-- EX_Correction（「やっぱり別の商品」→ ST_RequirementCheck）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 - EX_Silence（無音）
 
 **次状態**: ST_Closing
@@ -281,6 +279,7 @@ stateDiagram-v2
 | ST_OrderConfirmation | 「いいえ」 | ST_Closing | 注文キャンセル |
 | 任意の状態 | 無音検知 | EX_Silence | - |
 | ユーザー入力が必要な状態 | 聞き取り失敗 | EX_NoHear | ST_Greeting/RequirementCheck/ProductSuggestion/AddressConfirm/OrderConfirmation |
+| 任意の状態 | 言い直しキーワード検知 | ST_RequirementCheck | 内部補正処理（専用状態は持たない） |
 
 ---
 
@@ -317,7 +316,7 @@ stateDiagram-v2
 
 ---
 
-### EX_Correction（言い直し）
+### Correction（言い直し・内部例外処理）
 **トリガー条件**: ユーザーが以下のキーワードを発話（MVP default: 5パターン）
 1. 「やっぱり」
 2. 「違う」
@@ -326,12 +325,15 @@ stateDiagram-v2
 5. 「キャンセル」
 
 **動作**:
-- 発話時点の状態に応じて復帰先を切り替える
-  - ST_ProductSuggestion / ST_OrderConfirmation で発生した場合:
-    - ST_RequirementCheck に戻り、要件確認からやり直し
-    - 既に選択済みの商品IDはクリア
-  - ST_AddressConfirm で発生した場合:
-    - ST_AddressConfirm に戻り、住所確認をやり直し
+- 専用状態（`EX_Correction`）には遷移しない
+- 補正トリガ検知時に内部でリセットを実行し、`ST_RequirementCheck` に戻る
+- リセット対象（実装 `resetAllForCorrection()` 相当）:
+  - 商品・注文情報: `product`, `price`, `currency`, `deliveryDate`, `customerPhone`, `orderId`
+  - 住所系: `address`, `addressConfirmed`, `awaitingAddressConfirm`
+  - 要件系: `category`, `awaitingCategoryConfirm`, `suggestedProductIds`
+  - 米要件系: `riceBrand`, `riceWeightKg`, `riceMilling`, `riceNote`
+  - フラグ系: `awaitingBrandConfirm`, `awaitingWeightChoice`, `awaitingMillingChoice`, `brandConfirmed`, `awaitingDeliveryCancelConfirm`
+  - リトライ系: `deliveryRetries`, `orderRetries`
 
 **OpenQuestion**: OQ-007参照（キーワードリスト5つの妥当性） → ADR-004で解決済み
 
