@@ -52,7 +52,6 @@ stateDiagram-v2
     EX_NoHear --> ST_OrderConfirmation: 再確認
 
     EX_Correction --> ST_RequirementCheck: 要件から再開
-    EX_Correction --> ST_ProductSuggestion: 提案から再開
     EX_Correction --> ST_AddressConfirm: 住所確認から再開
 ```
 
@@ -327,8 +326,12 @@ stateDiagram-v2
 5. 「キャンセル」
 
 **動作**:
-- ST_RequirementCheck に戻り、要件確認からやり直し
-- 既に選択済みの商品IDはクリア
+- 発話時点の状態に応じて復帰先を切り替える
+  - ST_ProductSuggestion / ST_OrderConfirmation で発生した場合:
+    - ST_RequirementCheck に戻り、要件確認からやり直し
+    - 既に選択済みの商品IDはクリア
+  - ST_AddressConfirm で発生した場合:
+    - ST_AddressConfirm に戻り、住所確認をやり直し
 
 **OpenQuestion**: OQ-007参照（キーワードリスト5つの妥当性） → ADR-004で解決済み
 
