@@ -2,6 +2,12 @@
 
 このディレクトリには、音声販売AI（VLF）プロジェクトにおけるアーキテクチャ決定記録（ADR）を保存します。
 
+## 運用ルール
+
+- `1 ADR = 1 ファイル`（1つの判断を1つの履歴として独立管理）
+- 正式シリーズは `0001` からの連番ファイル（`0001-*.md` 形式）
+- 旧形式（`2025-...`）は履歴参照用として保持し、新規追加は連番形式に統一
+
 ## ADRとは
 
 ADR（Architecture Decision Record）は、プロジェクトにおける重要な設計判断を記録するドキュメントです。
@@ -11,18 +17,27 @@ ADR（Architecture Decision Record）は、プロジェクトにおける重要�
 - 将来のメンバーが判断の根拠を理解できる
 - 設計変更時に過去の判断を参照できる
 
-## ADR一覧
+## ADR一覧（正式シリーズ: 0001-0008）
 
-| ADR番号 | タイトル | 状態 | 日付 |
-|---------|---------|------|------|
+| ADR番号 | タイトル | 状態 |
+|---------|---------|------|
+| ADR-0001 | [管理画面（linguaflow-admin）をMVP仕様に含める](./0001-admin-console-scope.md) | Accepted |
+| ADR-0002 | [管理画面のフィルタと表示順の定義](./0002-admin-filters-and-ordering.md) | Accepted |
+| ADR-0003 | [配送先住所の解決順序](./0003-delivery-address-resolution.md) | Accepted |
+| ADR-0004 | [テレフォニーとWSゲートウェイの選定](./0004-telephony-and-ws-gateway.md) | Accepted |
+| ADR-0005 | [SQLite for MVP storage](./0005-sqlite-mvp-schema.md) | Accepted |
+| ADR-0006 | [SQLite driver for MVP](./0006-sqlite-driver-better-sqlite3.md) | Accepted |
+| ADR-0007 | [API framework for MVP](./0007-api-framework-express.md) | Accepted |
+| ADR-0008 | [Admin API auth scheme (JWT + refresh cookie)](./0008-admin-auth-jwt-refresh.md) | Accepted |
+
+## 旧形式ADR（履歴参照）
+
+| 旧ADR | タイトル | 状態 | 日付 |
+|------|---------|------|------|
 | ADR-001 | [DB保存タイミングをST_OrderConfirmationの「はい」受信時のみにする](./2025-01-07-db-save-timing-at-order-confirmation.md) | Accepted | 2025-01-07 |
 | ADR-002 | [EX_Silenceの無音閾値を初期値5秒にする](./2025-01-07-silence-threshold-initial-value-5-seconds.md) | Proposed | 2025-01-07 |
 | ADR-003 | [saveOrderのリトライ回数を1回にする](./2025-01-07-saveorder-retry-count-one-time.md) | Accepted | 2025-01-07 |
 | ADR-004 | [EX_Correctionのキーワードリストを5パターンにする](./2025-01-07-correction-keyword-list-five-patterns.md) | Accepted | 2025-01-07 |
-| ADR-005 | [SQLite for MVP storage](./0005-sqlite-mvp-schema.md) | Accepted | 2026-01-26 |
-| ADR-006 | [SQLite driver for MVP](./0006-sqlite-driver-better-sqlite3.md) | Accepted | 2026-01-26 |
-| ADR-007 | [API framework for MVP](./0007-api-framework-express.md) | Accepted | 2026-01-26 |
-| ADR-008 | [Admin auth scheme (JWT + refresh cookie)](./0008-admin-auth-jwt-refresh.md) | Accepted | 2026-01-26 |
 
 **ADRが必要になるケース**:
 - 状態遷移図への状態追加・削除
@@ -40,8 +55,8 @@ ADR（Architecture Decision Record）は、プロジェクトにおける重要�
 
 2. **手動で作成**:
    - テンプレート: `.claude/skills/adr-writer/SKILL.md` を参照
-   - ファイル名: `YYYY-MM-DD-<decision-title>.md`
-   - ADR番号: 既存ADRの次の連番（ADR-001, ADR-002...）
+   - ファイル名: `0009-<decision-title>.md` のような4桁連番形式
+   - ADR番号: 既存正式シリーズの次番号（ADR-0009, ADR-0010...）
 
 ## ADRの状態
 
