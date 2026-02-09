@@ -9,22 +9,22 @@ SSOT: docs/ImplementationTickets.md
 
 ## チケット一覧（MVP）
 ### A. 音声販売AI（会話オーケストレータ）
-1. 状態機械の実装（ST_Greeting〜ST_Closing、EX_*）
+1. 状態機械の実装（ST_Greeting〜ST_Closing、EX_Silence/EX_NoHear）
    - 受け入れ条件: ConversationSpecの遷移表と一致する
 2. STT/無音検知/聞き取り失敗の例外処理
-   - 受け入れ条件: EX_Silence/EX_NoHear/EX_Correctionの挙動が一致
+   - 受け入れ条件: EX_Silence/EX_NoHearと、Correctionの内部例外処理（リセット→RequirementCheck）が一致
 3. ツール連携（getStock/getPrice/getDeliveryDate/saveOrder）
-   - 受け入れ条件: 各ツールの入力/出力/タイムアウト/エラー動作が一致
+   - 受け入れ条件: 各ツールの入力/出力/タイムアウト/エラー動作が一致し、saveOrderはaddress必須
 4. 配送先住所の解決（Contact.address優先、未取得時の確認）
    - 受け入れ条件: ADR 0003に準拠
 5. 注文保存のトランザクション処理
-   - 受け入れ条件: saveOrder失敗時のリトライ1回とエラー終了
+   - 受け入れ条件: 住所未確定でsaveOrderを実行しない。saveOrder失敗時はリトライ1回とエラー終了
 6. テレフォニー連携（Twilio Media Streams）
-   - 受け入れ条件: PCMU/8kHzでWSゲートウェイへ音声が流れる
+   - 受け入れ条件: PCMU/8kHzでWSゲートウェイへ音声が流れ、バージイン時にTwilio clearで再生停止できる
 7. WSゲートウェイ（Node.js/TypeScript）
-   - 受け入れ条件: OpenAI Realtime APIと双方向で接続できる
+   - 受け入れ条件: OpenAI Realtime APIと双方向で接続でき、speech_started/response.cancelled等の観測ログを残せる
 8. 音声フォーマット（PCMU）
-   - 受け入れ条件: 変換なしでエンドツーエンドに成立する
+   - 受け入れ条件: Twilio送信直前で常に `audio/x-mulaw@8000` を満たす（必要時は変換）
 
 ### B. 管理API（/api/v1）
 9. SQLiteデータレイヤー（スキーマ/接続/リポジトリ）
@@ -57,3 +57,5 @@ SSOT: docs/ImplementationTickets.md
    - 受け入れ条件: 失敗時に必要情報が記録される
 21. KPI計測の基本ログ
    - 受け入れ条件: 注文完了率/離脱率/例外率の集計に必要なイベントが揃う
+22. 起動エントリのSSOT整備（server.js/server.ts混在対策）
+   - 受け入れ条件: README記載の起動手順が一意で、実行コマンドと一致する
