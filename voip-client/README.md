@@ -2,6 +2,10 @@
 
 Twilio Voice JavaScript SDKでブラウザ発着信テストを行うための最小構成です。
 
+## SSOT
+- 実行エントリは `src/server.ts`（手編集ソース）です。
+- 起動は `npm run dev`（`tsx src/server.ts`）を使用します。
+
 ## 事前準備
 1. Twilio ConsoleでTwiML Appを作成
 2. Voice URLは `https://<ngrok>/voice` を設定（proxy経由）

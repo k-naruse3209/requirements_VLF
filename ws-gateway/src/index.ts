@@ -4,6 +4,14 @@ import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
 import { createConversationController, type Product } from "./conversation.js";
 import { createToolClient } from "./tools.js";
+import {
+  convertRealtimeAudioToTwilioPcmu,
+  decodePcmuToPcm16,
+  generateBeepPcmu,
+  upsample,
+  TWILIO_SAMPLE_RATE,
+  type RealtimeAudioEncoding,
+} from "./audio.js";
 
 type TwilioEvent =
   | { event: "connected" }
@@ -22,7 +30,6 @@ type RealtimeEvent = {
 
 const server = http.createServer();
 const wss = new WebSocketServer({ server });
-const twilioSampleRate = 8000;
 
 const safeJson = (data: string): unknown => {
   try {
@@ -92,85 +99,6 @@ const extractUserTranscript = (
     }
   }
   return null;
-};
-
-const muLawDecodeSample = (value: number) => {
-  const muLaw = (~value) & 0xff;
-  const sign = muLaw & 0x80 ? -1 : 1;
-  const exponent = (muLaw >> 4) & 0x07;
-  const mantissa = muLaw & 0x0f;
-  const sample = ((mantissa << 3) + 0x84) << exponent;
-  return sign * (sample - 0x84);
-};
-
-const muLawEncodeSample = (sample: number) => {
-  const bias = 0x84;
-  const max = 0x1fff;
-  let pcm = sample;
-  let sign = 0;
-  if (pcm < 0) {
-    sign = 0x80;
-    pcm = -pcm;
-  }
-  if (pcm > max) pcm = max;
-  pcm += bias;
-  let exponent = 7;
-  for (let expMask = 0x4000; (pcm & expMask) === 0 && exponent > 0; expMask >>= 1) {
-    exponent -= 1;
-  }
-  const mantissa = (pcm >> (exponent + 3)) & 0x0f;
-  return (~(sign | (exponent << 4) | mantissa)) & 0xff;
-};
-
-const generateBeepPcmu = (frequencyHz: number, durationMs: number) => {
-  const sampleRate = 8000;
-  const totalSamples = Math.floor((durationMs / 1000) * sampleRate);
-  const buffer = Buffer.alloc(totalSamples);
-  for (let i = 0; i < totalSamples; i += 1) {
-    const t = i / sampleRate;
-    const sample = Math.round(Math.sin(2 * Math.PI * frequencyHz * t) * 12000);
-    buffer[i] = muLawEncodeSample(sample);
-  }
-  return buffer;
-};
-
-const decodePcmuToPcm16 = (input: Buffer) => {
-  const output = new Int16Array(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = muLawDecodeSample(input[i]);
-  }
-  return output;
-};
-
-const encodePcm16ToPcmu = (input: Int16Array) => {
-  const output = Buffer.alloc(input.length);
-  for (let i = 0; i < input.length; i += 1) {
-    output[i] = muLawEncodeSample(input[i]);
-  }
-  return output;
-};
-
-const upsample = (input: Int16Array, factor: number) => {
-  if (factor <= 1) return input;
-  const output = new Int16Array(input.length * factor);
-  let idx = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    const sample = input[i];
-    for (let f = 0; f < factor; f += 1) {
-      output[idx++] = sample;
-    }
-  }
-  return output;
-};
-
-const downsample = (input: Int16Array, factor: number) => {
-  if (factor <= 1) return input;
-  const length = Math.floor(input.length / factor);
-  const output = new Int16Array(length);
-  for (let i = 0; i < length; i += 1) {
-    output[i] = input[i * factor];
-  }
-  return output;
 };
 
 const loadCatalog = (): Product[] => {
@@ -293,9 +221,10 @@ wss.on("connection", (ws: WebSocket) => {
   let sessionId = "";
   const useAudioSchema = config.realtimeSchema === "audio";
   const audioMode = config.realtimeAudioMode === "pcm16" ? "pcm16" : "pcmu";
-  const outputSampleRate = audioMode === "pcmu" ? twilioSampleRate : config.realtimeAudioRate;
+  let realtimeOutputEncoding: RealtimeAudioEncoding = audioMode;
+  const outputSampleRate = audioMode === "pcmu" ? TWILIO_SAMPLE_RATE : config.realtimeAudioRate;
   const resampleFactor =
-    audioMode === "pcmu" ? 1 : Math.max(1, Math.round(outputSampleRate / twilioSampleRate));
+    audioMode === "pcmu" ? 1 : Math.max(1, Math.round(outputSampleRate / TWILIO_SAMPLE_RATE));
   const minCommitSamples = Math.ceil(outputSampleRate / 10);
   const vadEnabled = true;
   let pendingTranscript: { text: string; confidence: number | null; ts: number } | null = null;
@@ -323,7 +252,8 @@ wss.on("connection", (ws: WebSocket) => {
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
-    twilioInput: `audio/pcmu@${twilioSampleRate}`,
+    twilioInput: `audio/pcmu@${TWILIO_SAMPLE_RATE}`,
+    twilioOutput: `audio/pcmu@${TWILIO_SAMPLE_RATE}`,
     realtimeInput:
       useAudioSchema
         ? `${audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm"}@${outputSampleRate}`
@@ -336,7 +266,10 @@ wss.on("connection", (ws: WebSocket) => {
         : audioMode === "pcmu"
         ? "g711_ulaw"
         : "pcm16",
-    conversion: audioMode === "pcmu" ? "passthrough" : `pcmu->pcm16@${outputSampleRate}`,
+    conversion:
+      audioMode === "pcmu"
+        ? "inbound passthrough / outbound enforced pcmu@8k"
+        : `inbound pcmu->pcm16@${outputSampleRate} / outbound pcm16->pcmu@8k`,
   });
 
   const sendToRealtime = (payload: object) => {
@@ -357,6 +290,13 @@ wss.on("connection", (ws: WebSocket) => {
       realtime.close();
     }
     ws.close();
+  };
+
+  const parseRealtimeOutputEncoding = (formatType: unknown): RealtimeAudioEncoding => {
+    if (formatType === "audio/pcmu" || formatType === "g711_ulaw") {
+      return "pcmu";
+    }
+    return "pcm16";
   };
 
   const validateSession = (payload: RealtimeEvent) => {
@@ -391,6 +331,7 @@ wss.on("connection", (ws: WebSocket) => {
       if (!ok) {
         failFast("audio schema mismatch", { expectedInputFormat, expectedOutputFormat, transcriptionModel });
       }
+      realtimeOutputEncoding = parseRealtimeOutputEncoding(output?.type);
       return;
     }
     const input = session.input_audio_format;
@@ -409,6 +350,7 @@ wss.on("connection", (ws: WebSocket) => {
     if (!ok) {
       failFast("flat schema mismatch", { expectedInputFormat, expectedOutputFormat });
     }
+    realtimeOutputEncoding = parseRealtimeOutputEncoding(output);
   };
 
   const logOutgoing = (label: string, payload: object) => {
@@ -656,6 +598,22 @@ wss.on("connection", (ws: WebSocket) => {
     );
   };
 
+  const sendRealtimeAudioToTwilio = (audioBase64: string, source: string) => {
+    const twilioPayload = convertRealtimeAudioToTwilioPcmu(
+      audioBase64,
+      realtimeOutputEncoding,
+      resampleFactor
+    );
+    if (!twilioPayload) {
+      console.warn(`${logPrefix(wsId)} drop realtime audio`, {
+        source,
+        realtimeOutputEncoding,
+      });
+      return;
+    }
+    sendToTwilio(twilioPayload);
+  };
+
   const clearPendingBargeInCancel = () => {
     if (!bargeInCancelTimer) return;
     clearTimeout(bargeInCancelTimer);
@@ -854,7 +812,7 @@ wss.on("connection", (ws: WebSocket) => {
         const audio = buffer.toString("base64");
         if (audio) {
           console.log(`${logPrefix(wsId)} realtime binary audio`, buffer.length);
-          sendToTwilio(audio);
+          sendRealtimeAudioToTwilio(audio, "realtime.binary");
         }
         return;
       }
@@ -922,22 +880,8 @@ wss.on("connection", (ws: WebSocket) => {
       if (payload.type === "response.output_audio.delta" || payload.type === "response.audio.delta") {
         const delta = payload.delta as string | undefined;
         if (delta) {
-          if (useAudioSchema) {
-            if (audioMode === "pcmu") {
-              sendToTwilio(delta);
-              console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
-            } else {
-              const pcm = Buffer.from(delta, "base64");
-              const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
-              const downsampled = downsample(pcm16, resampleFactor);
-              const mulaw = encodePcm16ToPcmu(downsampled);
-              sendToTwilio(mulaw.toString("base64"));
-              console.log(`${logPrefix(wsId)} realtime audio delta bytes`, pcm.byteLength);
-            }
-          } else {
-            sendToTwilio(delta);
-            console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
-          }
+          sendRealtimeAudioToTwilio(delta, payload.type);
+          console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
         }
         return;
       }
@@ -959,19 +903,7 @@ wss.on("connection", (ws: WebSocket) => {
       if (payload.type === "output_audio_buffer.audio") {
         const audio = payload.audio as string | undefined;
         if (audio) {
-          if (useAudioSchema) {
-            if (audioMode === "pcmu") {
-              sendToTwilio(audio);
-            } else {
-              const pcm = Buffer.from(audio, "base64");
-              const pcm16 = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength / 2);
-              const downsampled = downsample(pcm16, resampleFactor);
-              const mulaw = encodePcm16ToPcmu(downsampled);
-              sendToTwilio(mulaw.toString("base64"));
-            }
-          } else {
-            sendToTwilio(audio);
-          }
+          sendRealtimeAudioToTwilio(audio, payload.type);
         }
       }
       if (payload.type === "response.content_part.added") {
@@ -979,7 +911,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (part?.audio) {
           const audio = typeof part.audio === "string" ? part.audio : part.audio?.data;
           if (audio) {
-            sendToTwilio(audio);
+            sendRealtimeAudioToTwilio(audio, payload.type);
             return;
           }
         }

@@ -4,6 +4,12 @@
   "type": "module",
   "private": true,
   "main": "src/server.js",
+  "scripts": {
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "init-db": "node src/init-db.js",
+    "seed-admin": "node src/seed-admin.js"
+  },
   "dependencies": {
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",

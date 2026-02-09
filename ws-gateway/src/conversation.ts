@@ -32,6 +32,7 @@ type ToolClient = {
     productId: string;
     price: number;
     deliveryDate: string;
+    address: string;
     customerPhone: string;
     timestamp: string;
   }) => Promise<{ orderId: string }>;
@@ -1117,20 +1118,25 @@ export const createConversationController = ({
   };
 
   const handleSaveOrder = async () => {
-    if (
-      !context.product ||
-      context.price == null ||
-      !context.deliveryDate ||
-      !context.customerPhone
-    ) {
+    if (!context.product || context.price == null || !context.deliveryDate || !context.customerPhone) {
       context.closingReason = "error";
       return enterState("ST_Closing");
+    }
+
+    if (!context.address || !context.addressConfirmed) {
+      onLog("saveOrder.blocked", {
+        reason: "address_unconfirmed",
+        address: context.address,
+        addressConfirmed: context.addressConfirmed,
+      });
+      return enterState("ST_AddressConfirm");
     }
 
     const payload = {
       productId: context.product.id,
       price: context.price,
       deliveryDate: context.deliveryDate,
+      address: context.address,
       customerPhone: context.customerPhone,
       timestamp: new Date().toISOString(),
     };

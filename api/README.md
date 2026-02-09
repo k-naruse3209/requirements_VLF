@@ -2,6 +2,10 @@
 
 管理APIの最小実装。SQLiteを使用します。
 
+## SSOT
+- 実行エントリは `src/server.js`（手編集ソース）です。
+- このディレクトリでは TypeScript ビルド運用はしていません。
+
 ## Env
 - DB_PATH
 - PORT
@@ -11,15 +15,15 @@
 
 ## Initialize DB
 ```
-node src/init-db.js
+npm run init-db
 ```
 
 ## Seed admin user
 ```
-ADMIN_EMAIL=... ADMIN_PASSWORD=... ADMIN_NAME=... node src/seed-admin.js
+ADMIN_EMAIL=... ADMIN_PASSWORD=... ADMIN_NAME=... npm run seed-admin
 ```
 
 ## Run
 ```
-node src/server.js
+npm run dev
 ```

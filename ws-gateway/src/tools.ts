@@ -73,6 +73,7 @@ export const createToolClient = (config: ToolConfig) => ({
     productId: string;
     price: number;
     deliveryDate: string;
+    address: string;
     customerPhone: string;
     timestamp: string;
   }) {
