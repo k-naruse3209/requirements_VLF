@@ -26,7 +26,7 @@ export const config = {
   realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 800),
   // Fallback guard in case Twilio mark ACK is not received.
   twilioPlaybackMarkTimeoutMs: Number(process.env.TWILIO_PLAYBACK_MARK_TIMEOUT_MS || 5000),
-  featureExplicitConversationItem: process.env.FEATURE_EXPLICIT_CONVERSATION_ITEM === "1",
+  featureExplicitConversationItem: process.env.FEATURE_EXPLICIT_CONVERSATION_ITEM !== "0",
   featureVerbatimWrapper: process.env.FEATURE_VERBATIM_WRAPPER === "1",
   featureInboundDropWhileAssistant: process.env.FEATURE_INBOUND_DROP_WHILE_ASSISTANT === "1",
   featureTwilioMarkGuard: process.env.FEATURE_TWILIO_MARK_GUARD === "1",
