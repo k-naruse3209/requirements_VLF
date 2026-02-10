@@ -26,12 +26,13 @@ export const config = {
   realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 800),
   // Fallback guard in case Twilio mark ACK is not received.
   twilioPlaybackMarkTimeoutMs: Number(process.env.TWILIO_PLAYBACK_MARK_TIMEOUT_MS || 5000),
-  featureExplicitConversationItem: process.env.FEATURE_EXPLICIT_CONVERSATION_ITEM !== "0",
-  featureVerbatimWrapper: process.env.FEATURE_VERBATIM_WRAPPER !== "0",
-  featureInboundDropWhileAssistant: process.env.FEATURE_INBOUND_DROP_WHILE_ASSISTANT !== "0",
-  featureTwilioMarkGuard: process.env.FEATURE_TWILIO_MARK_GUARD !== "0",
-  featureEmptyCommitToNoHear: process.env.FEATURE_EMPTY_COMMIT_TO_NOHEAR !== "0",
-  featureNonJaToNoHear: process.env.FEATURE_NON_JA_TO_NOHEAR !== "0",
+  // Stability-first defaults: keep advanced behavior off unless explicitly enabled.
+  featureExplicitConversationItem: process.env.FEATURE_EXPLICIT_CONVERSATION_ITEM === "1",
+  featureVerbatimWrapper: process.env.FEATURE_VERBATIM_WRAPPER === "1",
+  featureInboundDropWhileAssistant: process.env.FEATURE_INBOUND_DROP_WHILE_ASSISTANT === "1",
+  featureTwilioMarkGuard: process.env.FEATURE_TWILIO_MARK_GUARD === "1",
+  featureEmptyCommitToNoHear: process.env.FEATURE_EMPTY_COMMIT_TO_NOHEAR === "1",
+  featureNonJaToNoHear: process.env.FEATURE_NON_JA_TO_NOHEAR === "1",
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||

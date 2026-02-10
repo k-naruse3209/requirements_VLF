@@ -916,6 +916,15 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const handleBargeIn = (source: string) => {
+    if (!config.bargeInCancelEnabled) {
+      console.log(`${logPrefix(wsId)} bargein skipped`, {
+        source,
+        reason: "BARGE_IN_CANCEL=0",
+        responseActive,
+        responsePending,
+      });
+      return;
+    }
     const sinceLastAudioMs = lastTwilioAudioSentAt
       ? Date.now() - lastTwilioAudioSentAt
       : Number.POSITIVE_INFINITY;
@@ -1230,7 +1239,6 @@ wss.on("connection", (ws: WebSocket) => {
             id: (payload as { response_id?: string }).response_id,
             clientRequestId,
           });
-          handleBargeIn("unexpected_response_created");
           requestResponseCancel("unexpected_response_created", true);
           return;
         }
@@ -1593,6 +1601,7 @@ wss.on("connection", (ws: WebSocket) => {
 server.listen(config.port, () => {
   const runtimeKnobs = {
     interruptResponse: config.realtimeInterruptResponse,
+    bargeInCancelEnabled: config.bargeInCancelEnabled,
     vadSilenceMs: config.realtimeVadSilenceMs,
     explicitConversationItem: config.featureExplicitConversationItem,
     verbatimWrapper: config.featureVerbatimWrapper,
