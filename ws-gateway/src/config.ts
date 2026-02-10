@@ -30,7 +30,7 @@ export const config = {
   featureVerbatimWrapper: process.env.FEATURE_VERBATIM_WRAPPER === "1",
   featureInboundDropWhileAssistant: process.env.FEATURE_INBOUND_DROP_WHILE_ASSISTANT === "1",
   featureTwilioMarkGuard: process.env.FEATURE_TWILIO_MARK_GUARD === "1",
-  featureEmptyCommitToNoHear: process.env.FEATURE_EMPTY_COMMIT_TO_NOHEAR === "1",
+  featureEmptyCommitToNoHear: process.env.FEATURE_EMPTY_COMMIT_TO_NOHEAR !== "0",
   featureNonJaToNoHear: process.env.FEATURE_NON_JA_TO_NOHEAR === "1",
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
