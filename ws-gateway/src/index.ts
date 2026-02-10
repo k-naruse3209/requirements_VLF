@@ -484,14 +484,10 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
-    const responseInstruction = config.realtimeVerbatimEnabled
-      ? "直前に追加したassistantメッセージをそのまま読み上げてください。追加・言い換えはしないでください。"
-      : "直前に追加したassistantメッセージを短く丁寧に読み上げてください。";
-    const verbatimResponseOverrides = config.realtimeVerbatimEnabled
-      ? {
-          max_output_tokens: config.realtimeMaxResponseOutputTokens,
-        }
-      : {};
+    const responseInstruction = buildVerbatimInstructions(spokenText);
+    const responseOverrides = {
+      max_output_tokens: config.realtimeMaxResponseOutputTokens,
+    };
     const conversationItemPayload = {
       type: "conversation.item.create",
       item: {
@@ -504,7 +500,7 @@ wss.on("connection", (ws: WebSocket) => {
       ? {
           type: "response.create",
           response: {
-            ...verbatimResponseOverrides,
+            ...responseOverrides,
             audio: {
               output: {
                 format: {
@@ -521,7 +517,7 @@ wss.on("connection", (ws: WebSocket) => {
       : {
           type: "response.create",
           response: {
-            ...verbatimResponseOverrides,
+            ...responseOverrides,
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
@@ -548,13 +544,35 @@ wss.on("connection", (ws: WebSocket) => {
 
   const flushAssistantTranscript = () => {
     if (!assistantTranscript.trim()) return;
+    const spoken = assistantTranscript.trim();
+    const expected = lastAssistantPrompt.trim();
+    if (expected) {
+      const normalize = (text: string) =>
+        text
+          .normalize("NFKC")
+          .toLowerCase()
+          .replace(/[^\p{L}\p{N}]+/gu, "");
+      const expectedNorm = normalize(expected);
+      const spokenNorm = normalize(spoken);
+      if (
+        expectedNorm &&
+        spokenNorm &&
+        !expectedNorm.includes(spokenNorm) &&
+        !spokenNorm.includes(expectedNorm)
+      ) {
+        console.warn(`${logPrefix(wsId)} assistant transcript mismatch`, {
+          expected,
+          spoken,
+        });
+      }
+    }
     console.log(
-      `${logPrefix(wsId)} [CONV] AI ${JSON.stringify({ text: assistantTranscript.trim() })}`
+      `${logPrefix(wsId)} [CONV] AI ${JSON.stringify({ text: spoken })}`
     );
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "assistant",
-        content: assistantTranscript.trim(),
+        content: spoken,
         started_at: assistantTranscriptStartedAt || new Date().toISOString(),
         ended_at: new Date().toISOString(),
       });
@@ -892,9 +910,7 @@ wss.on("connection", (ws: WebSocket) => {
         ws.close();
         return;
       }
-      const sessionMaxResponseTokens = config.realtimeVerbatimEnabled
-        ? config.realtimeMaxResponseOutputTokens
-        : "inf";
+      const sessionMaxResponseTokens = config.realtimeMaxResponseOutputTokens;
       const inputAudio = {
         format: {
           type: audioMode === "pcmu" ? "audio/pcmu" : "audio/pcm",
