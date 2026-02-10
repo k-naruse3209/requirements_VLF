@@ -279,10 +279,13 @@ wss.on("connection", (ws: WebSocket) => {
   let lastInputEvent: { type: string; at: number; audioStartMs?: number; audioEndMs?: number } | null = null;
   let lastTimeoutTriggeredAt = 0;
   let responseSeq = 0;
+  let playbackMarkSeq = 0;
   const pendingResponseRequests = new Map<string, { ts: number; prompt: string }>();
   let cancelInFlight = false;
   let cancelRequestedAt = 0;
   let bargeInCancelTimer: NodeJS.Timeout | null = null;
+  let playbackMarkTimer: NodeJS.Timeout | null = null;
+  let pendingPlaybackMarkName: string | null = null;
   let pendingBargeInSpeech: { at: number; audioStartMs?: number; itemId: string | null } | null = null;
   let lastTwilioAudioSentAt = 0;
   const cancelDedupWindowMs = 1200;
@@ -777,6 +780,51 @@ wss.on("connection", (ws: WebSocket) => {
     bargeInCancelTimer = null;
   };
 
+  const clearPendingPlaybackMark = (reason: string) => {
+    if (playbackMarkTimer) {
+      clearTimeout(playbackMarkTimer);
+      playbackMarkTimer = null;
+    }
+    if (!pendingPlaybackMarkName) return;
+    console.log(`${logPrefix(wsId)} twilio mark cleared`, {
+      reason,
+      mark: pendingPlaybackMarkName,
+    });
+    pendingPlaybackMarkName = null;
+  };
+
+  const sendTwilioPlaybackMark = (source: string) => {
+    if (!streamSid) return false;
+    if (pendingPlaybackMarkName) {
+      clearPendingPlaybackMark("replaced");
+    }
+    const markName = `gw_playback_${Date.now()}_${++playbackMarkSeq}`;
+    ws.send(
+      JSON.stringify({
+        event: "mark",
+        streamSid,
+        mark: { name: markName },
+      })
+    );
+    pendingPlaybackMarkName = markName;
+    playbackMarkTimer = setTimeout(() => {
+      if (pendingPlaybackMarkName !== markName) return;
+      console.warn(`${logPrefix(wsId)} twilio mark timeout`, {
+        source,
+        mark: markName,
+        timeoutMs: config.twilioPlaybackMarkTimeoutMs,
+      });
+      pendingPlaybackMarkName = null;
+      playbackMarkTimer = null;
+    }, config.twilioPlaybackMarkTimeoutMs);
+    console.log(`${logPrefix(wsId)} twilio mark sent`, {
+      source,
+      mark: markName,
+      timeoutMs: config.twilioPlaybackMarkTimeoutMs,
+    });
+    return true;
+  };
+
   const sendTwilioClear = (reason: string) => {
     if (!streamSid) return false;
     ws.send(
@@ -1169,6 +1217,7 @@ wss.on("connection", (ws: WebSocket) => {
         clearPendingBargeInCancel();
         lastAssistantDoneAt = Date.now();
         flushAssistantTranscript();
+        sendTwilioPlaybackMark("response.done");
         conversation.onAssistantDone(completedPrompt);
         if (queuedUserTranscript) {
           const queued = queuedUserTranscript;
@@ -1360,7 +1409,10 @@ wss.on("connection", (ws: WebSocket) => {
             }
             break;
           }
-          if (!config.realtimeInterruptResponse && (responseActive || responsePending)) {
+          if (
+            !config.realtimeInterruptResponse &&
+            (responseActive || responsePending || pendingPlaybackMarkName !== null)
+          ) {
             droppedAssistantOverlapMediaCount += 1;
             if (
               droppedAssistantOverlapMediaCount === 1 ||
@@ -1370,6 +1422,7 @@ wss.on("connection", (ws: WebSocket) => {
                 reason: "REALTIME_INTERRUPT_RESPONSE=0",
                 responseActive,
                 responsePending,
+                pendingPlaybackMarkName,
                 droppedFrames: droppedAssistantOverlapMediaCount,
               });
             }
@@ -1424,6 +1477,7 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} [TWILIO] event=stop track=- len=0`);
         stopReceived = true;
         console.log(`${logPrefix(wsId)} stream stopped`);
+        clearPendingPlaybackMark("stream.stop");
         hasBufferedAudio = false;
         if (!vadEnabled && realtimeReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
           sendToRealtime({ type: "input_audio_buffer.commit" });
@@ -1441,6 +1495,14 @@ wss.on("connection", (ws: WebSocket) => {
         break;
       case "mark":
         console.log(`${logPrefix(wsId)} [TWILIO] event=mark track=- len=0`);
+        if (pendingPlaybackMarkName && event.mark.name === pendingPlaybackMarkName) {
+          clearPendingPlaybackMark("ack");
+        } else {
+          console.log(`${logPrefix(wsId)} twilio mark unexpected`, {
+            received: event.mark.name,
+            pending: pendingPlaybackMarkName,
+          });
+        }
         break;
       default:
         break;
@@ -1449,6 +1511,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   ws.on("close", (code, reason) => {
     clearPendingBargeInCancel();
+    clearPendingPlaybackMark("ws.close");
     console.log(`${logPrefix(wsId)} disconnected`, {
       code,
       reason: reason.toString(),

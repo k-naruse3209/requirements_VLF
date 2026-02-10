@@ -24,6 +24,8 @@ export const config = {
   bargeInMinSpeechMs: Number(process.env.BARGE_IN_MIN_SPEECH_MS || 450),
   // Slightly longer server-VAD tail reduces empty commits from clipped short utterances.
   realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 1000),
+  // Fallback guard in case Twilio mark ACK is not received.
+  twilioPlaybackMarkTimeoutMs: Number(process.env.TWILIO_PLAYBACK_MARK_TIMEOUT_MS || 5000),
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
