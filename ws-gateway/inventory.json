@@ -1,0 +1,74 @@
+[
+  {
+    "productId": "rice-koshihikari-5kg",
+    "available": true,
+    "quantity": 18,
+    "price": 3200,
+    "currency": "JPY",
+    "estimatedDays": 2
+  },
+  {
+    "productId": "rice-koshihikari-10kg",
+    "available": true,
+    "quantity": 14,
+    "price": 5980,
+    "currency": "JPY",
+    "estimatedDays": 2
+  },
+  {
+    "productId": "rice-koshihikari-20kg",
+    "available": true,
+    "quantity": 9,
+    "price": 11200,
+    "currency": "JPY",
+    "estimatedDays": 3
+  },
+  {
+    "productId": "rice-akitakomachi-5kg",
+    "available": true,
+    "quantity": 22,
+    "price": 3000,
+    "currency": "JPY",
+    "estimatedDays": 2
+  },
+  {
+    "productId": "rice-akitakomachi-10kg",
+    "available": true,
+    "quantity": 12,
+    "price": 5600,
+    "currency": "JPY",
+    "estimatedDays": 3
+  },
+  {
+    "productId": "rice-akitakomachi-20kg",
+    "available": true,
+    "quantity": 7,
+    "price": 10600,
+    "currency": "JPY",
+    "estimatedDays": 3
+  },
+  {
+    "productId": "rice-yumepirika-5kg",
+    "available": true,
+    "quantity": 16,
+    "price": 3400,
+    "currency": "JPY",
+    "estimatedDays": 3
+  },
+  {
+    "productId": "rice-yumepirika-10kg",
+    "available": true,
+    "quantity": 10,
+    "price": 6500,
+    "currency": "JPY",
+    "estimatedDays": 4
+  },
+  {
+    "productId": "rice-yumepirika-20kg",
+    "available": true,
+    "quantity": 5,
+    "price": 12400,
+    "currency": "JPY",
+    "estimatedDays": 4
+  }
+]

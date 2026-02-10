@@ -1,6 +1,7 @@
 import path from "node:path";
 
 const defaultCatalogPath = path.join(process.cwd(), "catalog.json");
+const defaultInventoryPath = path.join(process.cwd(), "inventory.json");
 
 export const config = {
   port: Number(process.env.WS_PORT || 8080),
@@ -49,6 +50,7 @@ export const config = {
   toolPriceTimeoutMs: Number(process.env.TOOL_PRICE_TIMEOUT_MS || 4000),
   toolDeliveryTimeoutMs: Number(process.env.TOOL_DELIVERY_TIMEOUT_MS || 6000),
   toolOrderTimeoutMs: Number(process.env.TOOL_ORDER_TIMEOUT_MS || 4000),
+  toolInventoryPath: process.env.TOOL_INVENTORY_PATH || defaultInventoryPath,
   orderRetryMax: Number(process.env.ORDER_RETRY_MAX || 1),
   deliveryRetryMax: Number(process.env.DELIVERY_RETRY_MAX || 1),
   productCatalogPath: process.env.PRODUCT_CATALOG_PATH || defaultCatalogPath,

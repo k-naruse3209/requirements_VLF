@@ -160,6 +160,7 @@ const toolClient = createToolClient({
   priceTimeoutMs: config.toolPriceTimeoutMs,
   deliveryTimeoutMs: config.toolDeliveryTimeoutMs,
   orderTimeoutMs: config.toolOrderTimeoutMs,
+  inventoryPath: config.toolInventoryPath,
 });
 
 const createLogClient = () => {

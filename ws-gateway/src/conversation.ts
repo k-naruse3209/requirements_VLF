@@ -117,6 +117,15 @@ const isDateLikeInput = (text: string) => {
   if (/\b\d{1,2}\s*日\b/.test(normalized)) return true;
   return false;
 };
+const isAddressLikeInput = (text: string) => {
+  const normalized = text.normalize("NFKC");
+  if (normalized.length < 5) return false;
+  if (/(都|道|府|県|市|区|町|村|丁目|番地|番|号)/.test(normalized)) return true;
+  if (/\d{1,4}\s*[-ー−]?\s*\d{1,4}/.test(normalized) && isJapaneseLike(normalized)) {
+    return true;
+  }
+  return false;
+};
 
 const normalizeText = (text: string) => text.trim();
 
@@ -574,8 +583,10 @@ export const createConversationController = ({
           onPrompt("商品情報が取得できませんでした。失礼いたします。");
           return enterState("ST_Closing", "stockcheck.missing_product");
         }
+        let stockQuantity: number | undefined;
         try {
           const stock = await toolClient.getStock(context.product.id);
+          stockQuantity = stock.quantity;
           if (!stock.available) {
             context.suggestedProductIds.push(context.product.id);
             context.product = undefined;
@@ -589,6 +600,11 @@ export const createConversationController = ({
           context.closingReason = "error";
           onPrompt("在庫確認に失敗しました。申し訳ございません。失礼いたします。");
           return enterState("ST_Closing", "stockcheck.tool_error");
+        }
+        if (typeof stockQuantity === "number") {
+          onPrompt(`在庫を確認しました。現在${stockQuantity}点ございます。`);
+        } else {
+          onPrompt("在庫を確認しました。ご用意可能です。");
         }
         return enterState("ST_PriceQuote", "stockcheck.available");
       }
@@ -1073,7 +1089,23 @@ export const createConversationController = ({
         if (isNo(normalized)) {
           return enterState("ST_ProductSuggestion", "pricequote.rejected");
         }
-        return enterState("ST_ProductSuggestion", "pricequote.unknown_treated_as_reject");
+        if (isAddressLikeInput(normalized)) {
+          context.address = normalized;
+          context.addressConfirmed = false;
+          context.awaitingAddressConfirm = true;
+          onInquiryUpdate({
+            brand: context.riceBrand,
+            weightKg: context.riceWeightKg,
+            deliveryAddress: context.address,
+            deliveryDate: context.deliveryDate,
+            note: context.riceNote,
+          });
+          onLog("[BRANCH] pricequote.address_like_input", { text: normalized });
+          return enterState("ST_AddressConfirm", "pricequote.address_provided");
+        }
+        onPrompt("価格案内後は「はい」または「いいえ」でお答えください。");
+        startSilenceTimer();
+        return;
       }
 
       if (state === "ST_AddressConfirm") {
