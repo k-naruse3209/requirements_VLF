@@ -20,6 +20,8 @@ export const config = {
   realtimeInterruptResponse: process.env.REALTIME_INTERRUPT_RESPONSE === "1",
   // Send Twilio clear only when outbound audio was sent recently.
   bargeInTwilioClearWindowMs: Number(process.env.BARGE_IN_CLEAR_WINDOW_MS || 1800),
+  // Ignore ultra-short VAD spikes (echo/noise) for barge-in cancel.
+  bargeInMinSpeechMs: Number(process.env.BARGE_IN_MIN_SPEECH_MS || 450),
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||

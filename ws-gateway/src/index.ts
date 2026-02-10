@@ -282,6 +282,7 @@ wss.on("connection", (ws: WebSocket) => {
   let cancelInFlight = false;
   let cancelRequestedAt = 0;
   let bargeInCancelTimer: NodeJS.Timeout | null = null;
+  let pendingBargeInSpeech: { at: number; audioStartMs?: number; itemId: string | null } | null = null;
   let lastTwilioAudioSentAt = 0;
   const cancelDedupWindowMs = 1200;
   const bargeInCancelFallbackMs = 180;
@@ -307,6 +308,7 @@ wss.on("connection", (ws: WebSocket) => {
         ? "inbound passthrough / outbound enforced pcmu@8k"
         : `inbound pcmu->pcm16@${outputSampleRate} / outbound pcm16->pcmu@8k`,
     interruptResponse: config.realtimeInterruptResponse,
+    bargeInMinSpeechMs: config.bargeInMinSpeechMs,
   });
 
   const sendToRealtime = (payload: object) => {
@@ -1160,6 +1162,7 @@ wss.on("connection", (ws: WebSocket) => {
         });
         responseActive = false;
         responsePending = false;
+        pendingBargeInSpeech = null;
         cancelInFlight = false;
         clearPendingBargeInCancel();
         lastAssistantDoneAt = Date.now();
@@ -1188,6 +1191,7 @@ wss.on("connection", (ws: WebSocket) => {
         });
         responseActive = false;
         responsePending = false;
+        pendingBargeInSpeech = null;
         cancelInFlight = false;
         clearPendingBargeInCancel();
         lastAssistantDoneAt = Date.now();
@@ -1199,8 +1203,21 @@ wss.on("connection", (ws: WebSocket) => {
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
+        const itemId = getRealtimeItemId(payload);
+        const audioStartMs = (payload as { audio_start_ms?: unknown }).audio_start_ms;
+        pendingBargeInSpeech = {
+          at: Date.now(),
+          audioStartMs: typeof audioStartMs === "number" ? audioStartMs : undefined,
+          itemId,
+        };
         if (config.realtimeInterruptResponse) {
-          handleBargeIn("speech_started");
+          console.log(`${logPrefix(wsId)} bargein pending`, {
+            source: "speech_started",
+            itemId,
+            minSpeechMs: config.bargeInMinSpeechMs,
+            responseActive,
+            responsePending,
+          });
         } else {
           console.log(`${logPrefix(wsId)} bargein skipped`, {
             source: "speech_started",
@@ -1210,9 +1227,38 @@ wss.on("connection", (ws: WebSocket) => {
         conversation.onSpeechStarted();
       }
       if (payload.type === "input_audio_buffer.speech_stopped") {
+        if (config.realtimeInterruptResponse) {
+          const audioEndMs = (payload as { audio_end_ms?: unknown }).audio_end_ms;
+          const speechDurationMs =
+            typeof pendingBargeInSpeech?.audioStartMs === "number" && typeof audioEndMs === "number"
+              ? Math.max(0, audioEndMs - pendingBargeInSpeech.audioStartMs)
+              : Math.max(
+                  0,
+                  Date.now() - (pendingBargeInSpeech?.at ?? Date.now())
+                );
+          if (!(responseActive || responsePending)) {
+            console.log(`${logPrefix(wsId)} bargein skipped`, {
+              source: "speech_stopped",
+              reason: "no_active_response",
+              speechDurationMs,
+            });
+          } else if (speechDurationMs < config.bargeInMinSpeechMs) {
+            console.log(`${logPrefix(wsId)} bargein skipped`, {
+              source: "speech_stopped",
+              reason: "short_speech",
+              speechDurationMs,
+              minSpeechMs: config.bargeInMinSpeechMs,
+              itemId: pendingBargeInSpeech?.itemId ?? null,
+            });
+          } else {
+            handleBargeIn("speech_stopped");
+          }
+        }
+        pendingBargeInSpeech = null;
         conversation.onSpeechStopped();
       }
       if (payload.type === "input_audio_buffer.committed") {
+        pendingBargeInSpeech = null;
         markCommitted(getRealtimeItemId(payload));
       }
     });
