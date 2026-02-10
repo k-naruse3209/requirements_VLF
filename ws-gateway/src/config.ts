@@ -2,6 +2,13 @@ import path from "node:path";
 
 const defaultCatalogPath = path.join(process.cwd(), "catalog.json");
 const defaultInventoryPath = path.join(process.cwd(), "inventory.json");
+const realtimeMaxOutputTokensEnv = process.env.REALTIME_MAX_OUTPUT_TOKENS;
+const parsedRealtimeMaxOutputTokens = (() => {
+  if (!realtimeMaxOutputTokensEnv) return undefined;
+  if (realtimeMaxOutputTokensEnv === "inf") return "inf" as const;
+  const parsed = Number(realtimeMaxOutputTokensEnv);
+  return Number.isFinite(parsed) ? parsed : undefined;
+})();
 
 export const config = {
   port: Number(process.env.WS_PORT || 8080),
@@ -40,9 +47,8 @@ export const config = {
   // Realtime "verbatim-ish" tuning (best-effort: cannot guarantee 100% determinism)
   // Realtime beta sessions clamp temperature (currently 0.6–1.2). Use the minimum to reduce variance.
   realtimeTemperature: Number(process.env.REALTIME_TEMPERATURE || 0.6),
-  realtimeMaxResponseOutputTokens: process.env.REALTIME_MAX_OUTPUT_TOKENS === "inf"
-    ? "inf"
-    : Number(process.env.REALTIME_MAX_OUTPUT_TOKENS || 120),
+  // Parity default: do not set explicit response token cap unless env is provided.
+  realtimeMaxResponseOutputTokens: parsedRealtimeMaxOutputTokens,
   realtimeVerbatimEnabled: process.env.REALTIME_VERBATIM === "1",
   silenceTimeoutMs: Number(process.env.SILENCE_TIMEOUT_MS || 7000),
   silenceRetriesMax: Number(process.env.SILENCE_RETRIES_MAX || 2),

@@ -505,9 +505,12 @@ wss.on("connection", (ws: WebSocket) => {
     const responseInstruction = config.featureVerbatimWrapper
       ? buildVerbatimInstructions(spokenText)
       : spokenText;
-    const responseOverrides = {
-      max_output_tokens: config.realtimeMaxResponseOutputTokens,
-    };
+    const responseOverrides =
+      config.realtimeMaxResponseOutputTokens == null
+        ? {}
+        : {
+          max_output_tokens: config.realtimeMaxResponseOutputTokens,
+        };
     const conversationItemPayload = {
       type: "conversation.item.create",
       item: {
@@ -1034,7 +1037,9 @@ wss.on("connection", (ws: WebSocket) => {
               type: "realtime",
               instructions: config.realtimeInstructions,
               temperature: config.realtimeTemperature,
-              max_response_output_tokens: sessionMaxResponseTokens,
+              ...(sessionMaxResponseTokens == null
+                ? {}
+                : { max_response_output_tokens: sessionMaxResponseTokens }),
               audio: {
                 input: inputAudio,
                 output: {
@@ -1052,8 +1057,10 @@ wss.on("connection", (ws: WebSocket) => {
           type: "session.update",
           session: {
             instructions: config.realtimeInstructions,
-              temperature: config.realtimeTemperature,
-              max_response_output_tokens: sessionMaxResponseTokens,
+            temperature: config.realtimeTemperature,
+            ...(sessionMaxResponseTokens == null
+              ? {}
+              : { max_response_output_tokens: sessionMaxResponseTokens }),
             input_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
@@ -1603,6 +1610,7 @@ server.listen(config.port, () => {
     interruptResponse: config.realtimeInterruptResponse,
     bargeInCancelEnabled: config.bargeInCancelEnabled,
     vadSilenceMs: config.realtimeVadSilenceMs,
+    maxResponseOutputTokens: config.realtimeMaxResponseOutputTokens ?? "default",
     explicitConversationItem: config.featureExplicitConversationItem,
     verbatimWrapper: config.featureVerbatimWrapper,
     emptyCommitToNoHear: config.featureEmptyCommitToNoHear,
