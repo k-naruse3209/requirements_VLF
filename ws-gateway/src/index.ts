@@ -112,6 +112,27 @@ const extractUserTranscript = (
   return null;
 };
 
+const extractTranscriptText = (payload: RealtimeEvent): string | null => {
+  if (
+    payload.type !== "input_audio_transcription.completed" &&
+    payload.type !== "conversation.item.input_audio_transcription.completed"
+  ) {
+    return null;
+  }
+  const text =
+    (payload as { transcript?: unknown }).transcript ??
+    (payload as { text?: unknown }).text;
+  return typeof text === "string" ? text : null;
+};
+
+const getRealtimeItemId = (payload: RealtimeEvent): string | null => {
+  const itemId =
+    (payload as { item_id?: unknown }).item_id ??
+    (payload as { itemId?: unknown }).itemId ??
+    (payload as { item?: { id?: unknown } }).item?.id;
+  return typeof itemId === "string" && itemId.length > 0 ? itemId : null;
+};
+
 const loadCatalog = (): Product[] => {
   if (!config.productCatalogPath) return [];
   try {
@@ -246,6 +267,8 @@ wss.on("connection", (ws: WebSocket) => {
   let lastAssistantPrompt = "";
   let lastAssistantDoneAt = 0;
   let lastCommitAt = 0;
+  let lastCommittedItemId: string | null = null;
+  let emptyTranscriptHandledCommitAt = 0;
   let awaitingTranscriptUntil = 0;
   const transcriptWaitMs = 2000;
   const echoSuppressionMs = config.echoSuppressionMs;
@@ -401,9 +424,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   const logServerEvent = (payload: RealtimeEvent, extra?: Record<string, unknown>) => {
     const responseId = (payload as { response_id?: string }).response_id;
-    const itemId =
-      (payload as { item_id?: string }).item_id ||
-      (payload as { item?: { id?: string } }).item?.id;
+    const itemId = getRealtimeItemId(payload);
     const audioStartMs = (payload as { audio_start_ms?: number }).audio_start_ms;
     const audioEndMs = (payload as { audio_end_ms?: number }).audio_end_ms;
     const reason =
@@ -592,6 +613,31 @@ wss.on("connection", (ws: WebSocket) => {
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
 
+  const handleCommittedWithoutTranscript = (reason: string, itemId?: string | null) => {
+    if (!lastCommitAt || emptyTranscriptHandledCommitAt === lastCommitAt) return;
+    emptyTranscriptHandledCommitAt = lastCommitAt;
+    commitPending = false;
+    if (commitTimer) {
+      clearTimeout(commitTimer);
+      commitTimer = null;
+    }
+    const commitAgeMs = Date.now() - lastCommitAt;
+    const effectiveItemId = itemId || lastCommittedItemId || null;
+    console.log(`${logPrefix(wsId)} committed without transcript`, {
+      reason,
+      commitAgeMs,
+      itemId: effectiveItemId,
+    });
+    console.log(
+      `${logPrefix(wsId)} [CONV] USER ${JSON.stringify({
+        text: "<EMPTY_TRANSCRIPT>",
+        reason,
+        itemId: effectiveItemId,
+      })}`
+    );
+    conversation.onUserCommitWithoutTranscript();
+  };
+
   const processCommittedTurn = () => {
     const now = Date.now();
     if (!pendingTranscript) return;
@@ -622,6 +668,14 @@ wss.on("connection", (ws: WebSocket) => {
         pendingTranscript = null;
         return;
       }
+      if (emptyTranscriptHandledCommitAt === lastCommitAt) {
+        console.log(`${logPrefix(wsId)} skip transcript (commit marked empty)`, {
+          text: pendingTranscript.text,
+          commitAgeMs,
+        });
+        pendingTranscript = null;
+        return;
+      }
       if (commitAgeMs > transcriptWaitMs) {
         console.log(`${logPrefix(wsId)} accept transcript (late)`, {
           text: pendingTranscript.text,
@@ -644,9 +698,11 @@ wss.on("connection", (ws: WebSocket) => {
     forwardUserTranscript(transcript, "committed");
   };
 
-  const markCommitted = () => {
+  const markCommitted = (itemId?: string | null) => {
     commitPending = true;
     lastCommitAt = Date.now();
+    lastCommittedItemId = itemId || null;
+    emptyTranscriptHandledCommitAt = 0;
     awaitingTranscriptUntil = lastCommitAt + transcriptWaitMs;
     conversation.onUserCommitted();
     processCommittedTurn();
@@ -655,7 +711,12 @@ wss.on("connection", (ws: WebSocket) => {
         if (!commitPending) return;
         commitPending = false;
         commitTimer = null;
-        console.log(`${logPrefix(wsId)} committed without transcript`);
+        const commitAgeMs = Date.now() - lastCommitAt;
+        console.log(`${logPrefix(wsId)} committed without transcript`, {
+          reason: "timeout",
+          commitAgeMs,
+          itemId: lastCommittedItemId,
+        });
       }, transcriptWaitMs);
     }
   };
@@ -926,6 +987,17 @@ wss.on("connection", (ws: WebSocket) => {
       }
       if (payload.type === "conversation.item.input_audio_transcription.completed") {
         logServerEvent(payload);
+        const transcriptText = extractTranscriptText(payload);
+        const commitAgeMs = lastCommitAt ? Date.now() - lastCommitAt : null;
+        const itemId = getRealtimeItemId(payload);
+        const itemMatchesCommit = !itemId || !lastCommittedItemId || itemId === lastCommittedItemId;
+        const transcriptIsEmpty = transcriptText == null || transcriptText.trim().length === 0;
+        const withinCommitWindow =
+          commitPending ||
+          (commitAgeMs != null && commitAgeMs <= Math.max(transcriptWaitMs * 4, 8000));
+        if (itemMatchesCommit && transcriptIsEmpty && withinCommitWindow) {
+          handleCommittedWithoutTranscript("transcription.empty", itemId);
+        }
       }
       if (payload.type === "error") {
         console.error(`${logPrefix(wsId)} realtime error event`, payload);
@@ -1125,7 +1197,7 @@ wss.on("connection", (ws: WebSocket) => {
         conversation.onSpeechStopped();
       }
       if (payload.type === "input_audio_buffer.committed") {
-        markCommitted();
+        markCommitted(getRealtimeItemId(payload));
       }
     });
 

@@ -189,6 +189,15 @@ const runSequence = async (
     console.log("ok case12: non-requirement state ignores requirement extraction");
   }
 
+  {
+    const { controller } = makeController();
+    await bootstrap(controller);
+    controller.onUserCommitWithoutTranscript();
+    await nextTick();
+    assert.equal(controller.getState(), "EX_NoHear");
+    console.log("ok case13: empty transcript commit triggers no-hear recovery");
+  }
+
   console.log("All rice flow tests passed");
 })().catch((err) => {
   console.error(err);

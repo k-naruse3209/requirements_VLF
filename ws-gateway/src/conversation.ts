@@ -1298,6 +1298,14 @@ export const createConversationController = ({
       void exitGreetingIfNeeded();
     },
 
+    onUserCommitWithoutTranscript: () => {
+      waitingForCommit = false;
+      clearTimers();
+      onLog("transcript.empty_commit", { state });
+      if (state === "ST_Closing") return;
+      void handleNoHearTimeout().catch((err) => onLog("state.transition.failed", err));
+    },
+
     onSpeechStarted: () => {
       waitingForCommit = true;
       if (silenceTimer) clearTimeout(silenceTimer);
