@@ -2,7 +2,12 @@ import http from "node:http";
 import fs from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
-import { createConversationController, type Product } from "./conversation.js";
+import {
+  createConversationController,
+  extractRiceBrand,
+  extractWeightKg,
+  type Product,
+} from "./conversation.js";
 import { createToolClient } from "./tools.js";
 import {
   convertRealtimeAudioToTwilioPcmu,
@@ -46,6 +51,7 @@ const safeJson = (data: string): unknown => {
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
 const verboseRealtimeLogs = process.env.REALTIME_VERBOSE_EVENTS === "1";
+const japaneseCharPattern = /[ぁ-んァ-ン一-龯]/;
 
 const buildVerbatimInstructions = (verbatimText: string) => {
   // Best-effort: model can still deviate, but this significantly reduces paraphrasing.
@@ -491,7 +497,9 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
-    const responseInstruction = buildVerbatimInstructions(spokenText);
+    const responseInstruction = config.featureVerbatimWrapper
+      ? buildVerbatimInstructions(spokenText)
+      : spokenText;
     const responseOverrides = {
       max_output_tokens: config.realtimeMaxResponseOutputTokens,
     };
@@ -532,8 +540,10 @@ wss.on("connection", (ws: WebSocket) => {
             metadata: { client_request_id: requestId, source: "gateway" },
           },
         };
-    logOutgoing("conversation.item.create", conversationItemPayload);
-    sendToRealtime(conversationItemPayload);
+    if (config.featureExplicitConversationItem) {
+      logOutgoing("conversation.item.create", conversationItemPayload);
+      sendToRealtime(conversationItemPayload);
+    }
     logOutgoing("response.create", payload);
     responsePending = true;
     lastAssistantPrompt = spokenText;
@@ -626,7 +636,26 @@ wss.on("connection", (ws: WebSocket) => {
     transcript: { text: string; confidence: number | null },
     source: "committed" | "queued"
   ) => {
-    if (shouldSkipTranscript(transcript, source)) return;
+    const shouldSkipNonJapaneseNoHear = (() => {
+      if (config.featureNonJaToNoHear) return false;
+      const normalized = transcript.text.trim();
+      if (!normalized || japaneseCharPattern.test(normalized)) return false;
+      const state = conversation.getState();
+      const context = conversation.getContext();
+      const allowFreeText =
+        state === "ST_AddressConfirm" ||
+        (state === "ST_OrderConfirmation" && !context.customerPhone);
+      if (allowFreeText) return false;
+      const hasInfo = extractWeightKg(normalized) != null || Boolean(extractRiceBrand(normalized));
+      if (hasInfo) return false;
+      console.log(`${logPrefix(wsId)} skip transcript (non-japanese parity mode)`, {
+        text: normalized,
+        state,
+        reason: "FEATURE_NON_JA_TO_NOHEAR=0",
+      });
+      return true;
+    })();
+    if (shouldSkipTranscript(transcript, source) || shouldSkipNonJapaneseNoHear) return;
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "user",
@@ -660,7 +689,15 @@ wss.on("connection", (ws: WebSocket) => {
         itemId: effectiveItemId,
       })}`
     );
-    conversation.onUserCommitWithoutTranscript();
+    if (config.featureEmptyCommitToNoHear) {
+      conversation.onUserCommitWithoutTranscript();
+      return;
+    }
+    console.log(`${logPrefix(wsId)} empty commit recovery disabled`, {
+      reason: "FEATURE_EMPTY_COMMIT_TO_NOHEAR=0",
+      commitAgeMs,
+      itemId: effectiveItemId,
+    });
   };
 
   const processCommittedTurn = () => {
@@ -1217,7 +1254,9 @@ wss.on("connection", (ws: WebSocket) => {
         clearPendingBargeInCancel();
         lastAssistantDoneAt = Date.now();
         flushAssistantTranscript();
-        sendTwilioPlaybackMark("response.done");
+        if (config.featureTwilioMarkGuard) {
+          sendTwilioPlaybackMark("response.done");
+        }
         conversation.onAssistantDone(completedPrompt);
         if (queuedUserTranscript) {
           const queued = queuedUserTranscript;
@@ -1410,6 +1449,7 @@ wss.on("connection", (ws: WebSocket) => {
             break;
           }
           if (
+            config.featureInboundDropWhileAssistant &&
             !config.realtimeInterruptResponse &&
             (responseActive || responsePending || pendingPlaybackMarkName !== null)
           ) {
@@ -1419,7 +1459,8 @@ wss.on("connection", (ws: WebSocket) => {
               droppedAssistantOverlapMediaCount % 50 === 0
             ) {
               console.log(`${logPrefix(wsId)} drop media while assistant speaking`, {
-                reason: "REALTIME_INTERRUPT_RESPONSE=0",
+                reason:
+                  "FEATURE_INBOUND_DROP_WHILE_ASSISTANT=1 and REALTIME_INTERRUPT_RESPONSE=0",
                 responseActive,
                 responsePending,
                 pendingPlaybackMarkName,
@@ -1538,13 +1579,19 @@ server.listen(config.port, () => {
   const runtimeKnobs = {
     interruptResponse: config.realtimeInterruptResponse,
     vadSilenceMs: config.realtimeVadSilenceMs,
+    explicitConversationItem: config.featureExplicitConversationItem,
+    verbatimWrapper: config.featureVerbatimWrapper,
+    emptyCommitToNoHear: config.featureEmptyCommitToNoHear,
+    nonJaToNoHear: config.featureNonJaToNoHear,
     inboundMediaDropGuard: {
-      enabledWhenInterruptResponseOff: true,
-      activeInCurrentMode: !config.realtimeInterruptResponse,
+      enabled: config.featureInboundDropWhileAssistant,
+      activeInCurrentMode:
+        config.featureInboundDropWhileAssistant &&
+        !config.realtimeInterruptResponse,
       dropConditions: ["responseActive", "responsePending", "pendingPlaybackMarkName"],
     },
     twilioPlaybackMarkGuard: {
-      enabled: true,
+      enabled: config.featureTwilioMarkGuard,
       timeoutMs: config.twilioPlaybackMarkTimeoutMs,
     },
   };

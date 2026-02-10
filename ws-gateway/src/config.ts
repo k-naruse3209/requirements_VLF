@@ -16,16 +16,22 @@ export const config = {
   realtimeCommitFrames: Number(process.env.REALTIME_COMMIT_FRAMES || 50),
   realtimeTranscriptionModel: process.env.REALTIME_TRANSCRIPTION_MODEL || "",
   bargeInCancelEnabled: process.env.BARGE_IN_CANCEL === "1",
-  // Keep server-side hard interrupt off by default; gateway handles barge-in explicitly.
-  realtimeInterruptResponse: process.env.REALTIME_INTERRUPT_RESPONSE === "1",
+  // Parity default: keep server-side interrupt on unless explicitly disabled.
+  realtimeInterruptResponse: process.env.REALTIME_INTERRUPT_RESPONSE !== "0",
   // Send Twilio clear only when outbound audio was sent recently.
   bargeInTwilioClearWindowMs: Number(process.env.BARGE_IN_CLEAR_WINDOW_MS || 1800),
   // Ignore ultra-short VAD spikes (echo/noise) for barge-in cancel.
   bargeInMinSpeechMs: Number(process.env.BARGE_IN_MIN_SPEECH_MS || 450),
-  // Slightly longer server-VAD tail reduces empty commits from clipped short utterances.
-  realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 1000),
+  // Parity default: shorter VAD silence tail.
+  realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 800),
   // Fallback guard in case Twilio mark ACK is not received.
   twilioPlaybackMarkTimeoutMs: Number(process.env.TWILIO_PLAYBACK_MARK_TIMEOUT_MS || 5000),
+  featureExplicitConversationItem: process.env.FEATURE_EXPLICIT_CONVERSATION_ITEM === "1",
+  featureVerbatimWrapper: process.env.FEATURE_VERBATIM_WRAPPER === "1",
+  featureInboundDropWhileAssistant: process.env.FEATURE_INBOUND_DROP_WHILE_ASSISTANT === "1",
+  featureTwilioMarkGuard: process.env.FEATURE_TWILIO_MARK_GUARD === "1",
+  featureEmptyCommitToNoHear: process.env.FEATURE_EMPTY_COMMIT_TO_NOHEAR === "1",
+  featureNonJaToNoHear: process.env.FEATURE_NON_JA_TO_NOHEAR === "1",
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
