@@ -899,8 +899,8 @@ export const createConversationController = ({
         context.riceWeightKg == null);
 
     if (!allowFreeText && !hasInfo && !isJapaneseLike(normalized)) {
-      onLog("transcript.skip_non_japanese", { text: normalized });
-      return;
+      onLog("transcript.skip_non_japanese", { text: normalized, state });
+      return handleNoHearTimeout();
     }
 
     const milling = extractMilling(normalized);
