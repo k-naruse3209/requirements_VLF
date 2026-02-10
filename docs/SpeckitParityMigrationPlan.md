@@ -127,6 +127,7 @@ Action:
 Pass criteria:
 - Echo-induced `speech_started` decreases.
 - No "assistant audio cut" regressions.
+- Stability guard: treat barge-in only when `speech_started` happened while response was already active/pending (avoid cutting fresh response for the same user utterance).
 
 #### 2E. Twilio mark guard
 Files:

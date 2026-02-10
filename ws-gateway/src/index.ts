@@ -292,7 +292,12 @@ wss.on("connection", (ws: WebSocket) => {
   let bargeInCancelTimer: NodeJS.Timeout | null = null;
   let playbackMarkTimer: NodeJS.Timeout | null = null;
   let pendingPlaybackMarkName: string | null = null;
-  let pendingBargeInSpeech: { at: number; audioStartMs?: number; itemId: string | null } | null = null;
+  let pendingBargeInSpeech: {
+    at: number;
+    audioStartMs?: number;
+    itemId: string | null;
+    eligibleForBargeIn: boolean;
+  } | null = null;
   let lastTwilioAudioSentAt = 0;
   const cancelDedupWindowMs = 1200;
   const bargeInCancelFallbackMs = 180;
@@ -1295,16 +1300,19 @@ wss.on("connection", (ws: WebSocket) => {
       if (payload.type === "input_audio_buffer.speech_started") {
         const itemId = getRealtimeItemId(payload);
         const audioStartMs = (payload as { audio_start_ms?: unknown }).audio_start_ms;
+        const eligibleForBargeIn = responseActive || responsePending;
         pendingBargeInSpeech = {
           at: Date.now(),
           audioStartMs: typeof audioStartMs === "number" ? audioStartMs : undefined,
           itemId,
+          eligibleForBargeIn,
         };
         if (config.realtimeInterruptResponse) {
           console.log(`${logPrefix(wsId)} bargein pending`, {
             source: "speech_started",
             itemId,
             minSpeechMs: config.bargeInMinSpeechMs,
+            eligibleForBargeIn,
             responseActive,
             responsePending,
           });
@@ -1326,7 +1334,14 @@ wss.on("connection", (ws: WebSocket) => {
                   0,
                   Date.now() - (pendingBargeInSpeech?.at ?? Date.now())
                 );
-          if (!(responseActive || responsePending)) {
+          if (!pendingBargeInSpeech?.eligibleForBargeIn) {
+            console.log(`${logPrefix(wsId)} bargein skipped`, {
+              source: "speech_stopped",
+              reason: "speech_started_before_response",
+              speechDurationMs,
+              itemId: pendingBargeInSpeech?.itemId ?? null,
+            });
+          } else if (!(responseActive || responsePending)) {
             console.log(`${logPrefix(wsId)} bargein skipped`, {
               source: "speech_stopped",
               reason: "no_active_response",
