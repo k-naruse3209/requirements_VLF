@@ -232,6 +232,7 @@ wss.on("connection", (ws: WebSocket) => {
   const wsId = Math.random().toString(36).slice(2, 8);
   let streamSid = "";
   let mediaCount = 0;
+  let droppedAssistantOverlapMediaCount = 0;
   let realtime: WebSocket | null = null;
   let realtimeReady = false;
   let sessionConfigured = false;
@@ -1338,6 +1339,15 @@ wss.on("connection", (ws: WebSocket) => {
         if (mediaCount === 1 || mediaCount % 50 === 0) {
           console.log(`${logPrefix(wsId)} media chunks`, mediaCount);
         }
+        if (event.media.track !== "inbound") {
+          if (mediaCount <= 5 || mediaCount % 100 === 0) {
+            console.log(`${logPrefix(wsId)} drop media non-inbound`, {
+              track: event.media.track,
+              mediaCount,
+            });
+          }
+          break;
+        }
         updateBytesWindow(mediaLen);
         if (realtimeReady) {
           if (!sessionConfigured) {
@@ -1348,6 +1358,27 @@ wss.on("connection", (ws: WebSocket) => {
               );
             }
             break;
+          }
+          if (!config.realtimeInterruptResponse && (responseActive || responsePending)) {
+            droppedAssistantOverlapMediaCount += 1;
+            if (
+              droppedAssistantOverlapMediaCount === 1 ||
+              droppedAssistantOverlapMediaCount % 50 === 0
+            ) {
+              console.log(`${logPrefix(wsId)} drop media while assistant speaking`, {
+                reason: "REALTIME_INTERRUPT_RESPONSE=0",
+                responseActive,
+                responsePending,
+                droppedFrames: droppedAssistantOverlapMediaCount,
+              });
+            }
+            break;
+          }
+          if (droppedAssistantOverlapMediaCount > 0) {
+            console.log(`${logPrefix(wsId)} resume media forwarding`, {
+              droppedFrames: droppedAssistantOverlapMediaCount,
+            });
+            droppedAssistantOverlapMediaCount = 0;
           }
           if (useAudioSchema) {
             if (audioMode === "pcmu") {
