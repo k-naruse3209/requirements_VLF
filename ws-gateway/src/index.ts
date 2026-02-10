@@ -310,6 +310,7 @@ wss.on("connection", (ws: WebSocket) => {
         : `inbound pcmu->pcm16@${outputSampleRate} / outbound pcm16->pcmu@8k`,
     interruptResponse: config.realtimeInterruptResponse,
     bargeInMinSpeechMs: config.bargeInMinSpeechMs,
+    realtimeVadSilenceMs: config.realtimeVadSilenceMs,
   });
 
   const sendToRealtime = (payload: object) => {
@@ -922,7 +923,7 @@ wss.on("connection", (ws: WebSocket) => {
         transcription: { model: config.realtimeTranscriptionModel },
         turn_detection: {
           type: "server_vad",
-          silence_duration_ms: 800,
+          silence_duration_ms: config.realtimeVadSilenceMs,
           create_response: false,
           interrupt_response: config.realtimeInterruptResponse,
         },
@@ -961,7 +962,7 @@ wss.on("connection", (ws: WebSocket) => {
             input_audio_transcription: { model: config.realtimeTranscriptionModel },
             turn_detection: {
               type: "server_vad",
-              silence_duration_ms: 800,
+              silence_duration_ms: config.realtimeVadSilenceMs,
               create_response: false,
               interrupt_response: config.realtimeInterruptResponse,
             },

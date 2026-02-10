@@ -22,6 +22,8 @@ export const config = {
   bargeInTwilioClearWindowMs: Number(process.env.BARGE_IN_CLEAR_WINDOW_MS || 1800),
   // Ignore ultra-short VAD spikes (echo/noise) for barge-in cancel.
   bargeInMinSpeechMs: Number(process.env.BARGE_IN_MIN_SPEECH_MS || 450),
+  // Slightly longer server-VAD tail reduces empty commits from clipped short utterances.
+  realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 1000),
   echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
