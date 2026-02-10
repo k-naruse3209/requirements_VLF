@@ -17,7 +17,12 @@ type TwilioEvent =
   | { event: "connected" }
   | {
       event: "start";
-      start: { streamSid: string; callSid: string; customParameters?: Record<string, string> };
+      start: {
+        streamSid: string;
+        callSid: string;
+        customParameters?: Record<string, string>;
+        tracks?: string[];
+      };
     }
   | { event: "media"; media: { payload: string; track: "inbound" | "outbound" } }
   | { event: "stop" }
@@ -40,6 +45,7 @@ const safeJson = (data: string): unknown => {
 };
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
+const verboseRealtimeLogs = process.env.REALTIME_VERBOSE_EVENTS === "1";
 
 const buildVerbatimInstructions = (verbatimText: string) => {
   // Best-effort: model can still deviate, but this significantly reduces paraphrasing.
@@ -84,7 +90,12 @@ const extractUserTranscript = (
     }
   }
   if (payload.type === "conversation.item.input_audio_transcription.completed") {
-    console.log(`${logPrefix("transcription")} input_audio_transcription.completed`, JSON.stringify(payload));
+    if (verboseRealtimeLogs) {
+      console.log(
+        `${logPrefix("transcription")} input_audio_transcription.completed`,
+        JSON.stringify(payload)
+      );
+    }
     const text = (payload as { transcript?: string; text?: string }).transcript ||
       (payload as { text?: string }).text;
     if (typeof text === "string" && text.trim()) {
@@ -397,6 +408,8 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const loggableEvents = new Set([
+    "session.created",
+    "session.updated",
     "input_audio_buffer.speech_started",
     "input_audio_buffer.speech_stopped",
     "input_audio_buffer.committed",
@@ -410,30 +423,43 @@ wss.on("connection", (ws: WebSocket) => {
     "error",
   ]);
 
+  const logRealtimeEventName = (type?: string) => {
+    if (!type || !loggableEvents.has(type)) return;
+    console.log(`${logPrefix(wsId)} [REALTIME] event=${type}`);
+  };
+
   const logClient = createLogClient();
   if (!logClient) {
     console.warn(`${logPrefix(wsId)} log client disabled (LOG_API_BASE_URL not set)`);
   }
 
   const createResponse = (instructions?: string) => {
-    if (!instructions) return;
-    const finalInstructions = config.realtimeVerbatimEnabled
-      ? buildVerbatimInstructions(instructions)
-      : instructions;
+    const spokenText = instructions?.trim();
+    if (!spokenText) return;
     if (responseActive || responsePending) {
-      promptQueue.push(finalInstructions);
+      promptQueue.push(spokenText);
       console.log(`${logPrefix(wsId)} queue response.create (active/pending)`, {
         queued: promptQueue.length,
       });
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
+    const responseInstruction = config.realtimeVerbatimEnabled
+      ? "直前に追加したassistantメッセージをそのまま読み上げてください。追加・言い換えはしないでください。"
+      : "直前に追加したassistantメッセージを短く丁寧に読み上げてください。";
     const verbatimResponseOverrides = config.realtimeVerbatimEnabled
       ? {
-          conversation: "none" as const,
           max_output_tokens: config.realtimeMaxResponseOutputTokens,
         }
       : {};
+    const conversationItemPayload = {
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "input_text", text: spokenText }],
+      },
+    };
     const payload = useAudioSchema
       ? {
           type: "response.create",
@@ -448,7 +474,7 @@ wss.on("connection", (ws: WebSocket) => {
                 voice: "alloy",
               },
             },
-            ...(finalInstructions ? { instructions: finalInstructions } : {}),
+            instructions: responseInstruction,
             metadata: { client_request_id: requestId, source: "gateway" },
           },
         }
@@ -459,19 +485,21 @@ wss.on("connection", (ws: WebSocket) => {
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
-            ...(finalInstructions ? { instructions: finalInstructions } : {}),
+            instructions: responseInstruction,
             metadata: { client_request_id: requestId, source: "gateway" },
           },
         };
+    logOutgoing("conversation.item.create", conversationItemPayload);
+    sendToRealtime(conversationItemPayload);
     logOutgoing("response.create", payload);
     responsePending = true;
-    lastAssistantPrompt = finalInstructions;
-    pendingResponseRequests.set(requestId, { ts: Date.now(), prompt: finalInstructions });
+    lastAssistantPrompt = spokenText;
+    pendingResponseRequests.set(requestId, { ts: Date.now(), prompt: spokenText });
     sendToRealtime(payload);
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "assistant",
-        content: finalInstructions,
+        content: spokenText,
         started_at: new Date().toISOString(),
         ended_at: new Date().toISOString(),
       });
@@ -830,13 +858,16 @@ wss.on("connection", (ws: WebSocket) => {
         const buffer = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
         const audio = buffer.toString("base64");
         if (audio) {
-          console.log(`${logPrefix(wsId)} realtime binary audio`, buffer.length);
+          if (verboseRealtimeLogs) {
+            console.log(`${logPrefix(wsId)} realtime binary audio`, buffer.length);
+          }
           sendRealtimeAudioToTwilio(audio, "realtime.binary");
         }
         return;
       }
       const payload = safeJson(data.toString()) as RealtimeEvent | null;
       if (!payload) return;
+      logRealtimeEventName(payload.type);
       if (payload.type?.startsWith("input_audio_buffer.")) {
         const audioStartMs = (payload as { audio_start_ms?: number }).audio_start_ms;
         const audioEndMs = (payload as { audio_end_ms?: number }).audio_end_ms;
@@ -887,7 +918,9 @@ wss.on("connection", (ws: WebSocket) => {
         sessionCreatedLogged = true;
         const createdSessionId = (payload as { session?: { id?: string } }).session?.id;
         if (createdSessionId) sessionId = createdSessionId;
-        console.log(`${logPrefix(wsId)} session.created payload`, JSON.stringify(payload, null, 2));
+        if (verboseRealtimeLogs) {
+          console.log(`${logPrefix(wsId)} session.created payload`, JSON.stringify(payload, null, 2));
+        }
         validateSession(payload);
       }
       if (payload.type === "session.updated") {
@@ -900,7 +933,9 @@ wss.on("connection", (ws: WebSocket) => {
         const delta = payload.delta as string | undefined;
         if (delta) {
           sendRealtimeAudioToTwilio(delta, payload.type);
-          console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
+          if (verboseRealtimeLogs) {
+            console.log(`${logPrefix(wsId)} realtime audio delta bytes`, Buffer.from(delta, "base64").length);
+          }
         }
         return;
       }
@@ -934,16 +969,17 @@ wss.on("connection", (ws: WebSocket) => {
             return;
           }
         }
-        console.log(`${logPrefix(wsId)} content_part keys`, Object.keys(part || {}));
-        console.log(`${logPrefix(wsId)} content_part payload`, JSON.stringify(part || {}));
+        if (verboseRealtimeLogs) {
+          console.log(`${logPrefix(wsId)} content_part keys`, Object.keys(part || {}));
+          console.log(`${logPrefix(wsId)} content_part payload`, JSON.stringify(part || {}));
+        }
       }
       if (payload.type === "response.output_item.added") {
         const itemId = (payload as { item?: { id?: string } }).item?.id;
         if (itemId) lastOutputItemId = itemId;
-        console.log(`${logPrefix(wsId)} output_item payload`, JSON.stringify(payload));
-      }
-      if (payload.type) {
-        console.log(`${logPrefix(wsId)} realtime event`, payload.type);
+        if (verboseRealtimeLogs) {
+          console.log(`${logPrefix(wsId)} output_item payload`, JSON.stringify(payload));
+        }
       }
       if (payload.type === "response.created") {
         const response = (payload as { response?: { metadata?: Record<string, unknown> } }).response;
@@ -1065,7 +1101,15 @@ wss.on("connection", (ws: WebSocket) => {
 
     const event = payload as TwilioEvent;
     switch (event.event) {
+      case "connected":
+        console.log(`${logPrefix(wsId)} [TWILIO] event=connected track=- len=0`);
+        break;
       case "start":
+        console.log(
+          `${logPrefix(wsId)} [TWILIO] event=start track=${
+            event.start.tracks?.join("|") || "-"
+          } len=0`
+        );
         streamSid = event.start.streamSid;
         callSid = event.start.callSid;
         console.log(`${logPrefix(wsId)} stream started`, event.start);
@@ -1106,10 +1150,16 @@ wss.on("connection", (ws: WebSocket) => {
         break;
       case "media":
         mediaCount += 1;
+        const mediaLen = Buffer.byteLength(event.media.payload, "base64");
+        if (mediaCount === 1 || mediaCount % 50 === 0) {
+          console.log(
+            `${logPrefix(wsId)} [TWILIO] event=media track=${event.media.track} len=${mediaLen}`
+          );
+        }
         if (mediaCount === 1 || mediaCount % 50 === 0) {
           console.log(`${logPrefix(wsId)} media chunks`, mediaCount);
         }
-        updateBytesWindow(Buffer.byteLength(event.media.payload, "base64"));
+        updateBytesWindow(mediaLen);
         if (realtimeReady) {
           if (!sessionConfigured) {
             if (mediaCount <= 5 || mediaCount % 100 === 0) {
@@ -1160,6 +1210,7 @@ wss.on("connection", (ws: WebSocket) => {
         }
         break;
       case "stop":
+        console.log(`${logPrefix(wsId)} [TWILIO] event=stop track=- len=0`);
         stopReceived = true;
         console.log(`${logPrefix(wsId)} stream stopped`);
         hasBufferedAudio = false;
@@ -1176,6 +1227,9 @@ wss.on("connection", (ws: WebSocket) => {
             status: "completed",
           });
         }
+        break;
+      case "mark":
+        console.log(`${logPrefix(wsId)} [TWILIO] event=mark track=- len=0`);
         break;
       default:
         break;

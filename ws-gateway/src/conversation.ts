@@ -109,6 +109,14 @@ const genmaiPattern = /(玄米|げんまい)/;
 const isYes = (text: string) => yesPattern.test(text);
 const isNo = (text: string) => noPattern.test(text);
 const isJapaneseLike = (text: string) => japaneseCharPattern.test(text);
+const isDateLikeInput = (text: string) => {
+  const normalized = text.normalize("NFKC").toLowerCase();
+  if (/(明日|あした|tomorrow|きょう|今日|本日)/.test(normalized)) return true;
+  if (/\b\d{1,2}\s*[/-]\s*\d{1,2}\b/.test(normalized)) return true;
+  if (/\d{1,2}\s*月\s*\d{1,2}\s*日?/.test(normalized)) return true;
+  if (/\b\d{1,2}\s*日\b/.test(normalized)) return true;
+  return false;
+};
 
 const normalizeText = (text: string) => text.trim();
 
@@ -452,11 +460,38 @@ export const createConversationController = ({
     context.noHearRetries = 0;
   };
 
-  const enterState = async (nextState: ConversationState) => {
+  const buildStateLogContext = (nextState: ConversationState) => ({
+    state: nextState,
+    productId: context.product?.id ?? null,
+    weightKg: context.riceWeightKg ?? null,
+    address: context.address ?? null,
+    deliveryDate: context.deliveryDate ?? null,
+    customerPhone: context.customerPhone ?? null,
+  });
+
+  const logStateTransition = (
+    prevState: ConversationState,
+    nextState: ConversationState,
+    reason: string
+  ) => {
+    const ctx = buildStateLogContext(nextState);
+    onLog(
+      `[STATE] ${prevState} -> ${nextState} reason=${reason} ctx=${JSON.stringify(
+        ctx
+      )}`
+    );
+  };
+
+  const enterState = async (
+    nextState: ConversationState,
+    reason = "unspecified"
+  ) => {
+    const prevState = state;
     state = nextState;
     if (nextState.startsWith("ST_")) {
       lastInteractiveState = nextState;
     }
+    logStateTransition(prevState, nextState, reason);
     onLog("state.enter", { state: nextState, context });
     clearTimers();
 
@@ -470,19 +505,24 @@ export const createConversationController = ({
 
       case "ST_RequirementCheck": {
         if (skipRequirementPromptOnce) {
+          onLog("[BRANCH] requirement.skip_prompt_once");
           skipRequirementPromptOnce = false;
           startSilenceTimer();
           break;
         }
         if (context.awaitingBrandConfirm && context.riceBrand) {
+          onLog("[BRANCH] requirement.awaiting_brand_confirm");
           onPrompt(`「${context.riceBrand}」でよろしいですか？`);
         } else if (context.brandConfirmed && !context.riceWeightKg) {
+          onLog("[BRANCH] requirement.awaiting_weight_choice");
           onPrompt(weightOptionsPrompt);
         } else if (!context.riceBrand && context.riceWeightKg) {
+          onLog("[BRANCH] requirement.awaiting_brand_only");
           onPrompt(
             `量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`
           );
         } else {
+          onLog("[BRANCH] requirement.collect_brand_weight");
           onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
         }
         startSilenceTimer();
@@ -492,7 +532,10 @@ export const createConversationController = ({
       case "ST_ProductSuggestion": {
         // 商品を確定し、音声応答が完了したタイミング（onAssistantDone）で在庫確認へ進む
         if (!context.riceBrand || !context.riceWeightKg) {
-          return enterState("ST_RequirementCheck");
+          return enterState(
+            "ST_RequirementCheck",
+            "productsuggestion.missing_brand_or_weight"
+          );
         }
         context.category = context.riceBrand;
 
@@ -503,7 +546,7 @@ export const createConversationController = ({
         if (!picked) {
           context.closingReason = "error";
           onPrompt("該当商品が見つかりませんでした。申し訳ございません。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "productsuggestion.product_not_found");
         }
 
         context.product = picked;
@@ -529,7 +572,7 @@ export const createConversationController = ({
         if (!context.product) {
           context.closingReason = "error";
           onPrompt("商品情報が取得できませんでした。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "stockcheck.missing_product");
         }
         try {
           const stock = await toolClient.getStock(context.product.id);
@@ -539,22 +582,22 @@ export const createConversationController = ({
             onPrompt(
               "申し訳ございません、在庫がありませんでした。別の商品をお探しします。"
             );
-            return enterState("ST_ProductSuggestion");
+            return enterState("ST_ProductSuggestion", "stockcheck.no_stock_retry");
           }
         } catch (err) {
           onLog("getStock failed", err);
           context.closingReason = "error";
           onPrompt("在庫確認に失敗しました。申し訳ございません。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "stockcheck.tool_error");
         }
-        return enterState("ST_PriceQuote");
+        return enterState("ST_PriceQuote", "stockcheck.available");
       }
 
       case "ST_PriceQuote": {
         if (!context.product) {
           context.closingReason = "error";
           onPrompt("商品情報が取得できませんでした。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "pricequote.missing_product");
         }
         try {
           const price = await toolClient.getPrice(context.product.id);
@@ -564,7 +607,7 @@ export const createConversationController = ({
           onLog("getPrice failed", err);
           context.closingReason = "error";
           onPrompt("価格情報の取得に失敗しました。申し訳ございません。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "pricequote.tool_error");
         }
         const priceText =
           context.currency === "JPY"
@@ -577,7 +620,7 @@ export const createConversationController = ({
 
       case "ST_AddressConfirm": {
         if (context.address && context.addressConfirmed) {
-          return enterState("ST_DeliveryCheck");
+          return enterState("ST_DeliveryCheck", "addressconfirm.already_confirmed");
         }
         if (context.address && context.awaitingAddressConfirm) {
           onPrompt(`配送先は${context.address}でよろしいでしょうか？`);
@@ -602,7 +645,7 @@ export const createConversationController = ({
         if (!context.product || !context.address) {
           context.closingReason = "error";
           onPrompt("配送先情報が取得できませんでした。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "deliverycheck.missing_requirements");
         }
 
         try {
@@ -622,7 +665,7 @@ export const createConversationController = ({
           onLog("getDeliveryDate failed", err);
           context.closingReason = "error";
           onPrompt("配送日の取得に失敗しました。申し訳ございません。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "deliverycheck.tool_error");
         }
 
         onPrompt(`配送は${context.deliveryDate}の予定です。よろしいですか？`);
@@ -634,7 +677,7 @@ export const createConversationController = ({
         if (!context.product || context.price == null || !context.deliveryDate) {
           context.closingReason = "error";
           onPrompt("注文内容が取得できませんでした。失礼いたします。");
-          return enterState("ST_Closing");
+          return enterState("ST_Closing", "orderconfirm.missing_requirements");
         }
         if (!context.customerPhone) {
           onPrompt("確認のためお電話番号をもう一度お知らせいただけますか？");
@@ -693,22 +736,22 @@ export const createConversationController = ({
     context.silenceRetries += 1;
     if (context.silenceRetries > config.silenceRetriesMax) {
       context.closingReason = "error";
-      await enterState("ST_Closing");
+      await enterState("ST_Closing", "silence.retry_exhausted");
       return;
     }
     onLog("state.exception", { type: "EX_Silence", retries: context.silenceRetries });
-    await enterState("EX_Silence");
+    await enterState("EX_Silence", "silence.timeout");
   };
 
   const handleNoHearTimeout = async () => {
     context.noHearRetries += 1;
     if (context.noHearRetries > config.noHearRetriesMax) {
       context.closingReason = "error";
-      await enterState("ST_Closing");
+      await enterState("ST_Closing", "nohear.retry_exhausted");
       return;
     }
     onLog("state.exception", { type: "EX_NoHear", retries: context.noHearRetries });
-    await enterState("EX_NoHear");
+    await enterState("EX_NoHear", "nohear.timeout");
   };
 
   const flushGreetingQueue = async () => {
@@ -722,7 +765,7 @@ export const createConversationController = ({
   const exitGreetingIfNeeded = async () => {
     if (state !== "ST_Greeting") return;
     skipRequirementPromptOnce = true;
-    await enterState("ST_RequirementCheck");
+    await enterState("ST_RequirementCheck", "greeting.completed");
     await flushGreetingQueue();
   };
 
@@ -757,13 +800,15 @@ export const createConversationController = ({
 
     context.awaitingDeliveryCancelConfirm = false;
 
-    await enterState("ST_RequirementCheck");
+    await enterState("ST_RequirementCheck", "correction.reset");
   };
 
   const handleUserTranscript = async (text: string, confidence: number | null) => {
     // ★例外 state からは直前の対話 state に復帰して処理
-    if (state === "EX_Silence" || state === "EX_NoHear") {
+      if (state === "EX_Silence" || state === "EX_NoHear") {
+      const prevState = state;
       state = lastInteractiveState;
+      logStateTransition(prevState, state, "exception.resume");
       onLog("state.resume", { resumedTo: state });
     }
 
@@ -825,6 +870,7 @@ export const createConversationController = ({
     // Brand confirm flow
     // ─────────────────────────────────────────
     if (context.awaitingBrandConfirm && context.riceBrand) {
+      onLog("[BRANCH] transcript.awaiting_brand_confirm", { normalized });
       if (isYes(normalized)) {
         context.awaitingBrandConfirm = false;
         context.brandConfirmed = true;
@@ -844,7 +890,10 @@ export const createConversationController = ({
             deliveryDate: context.deliveryDate,
             note: context.riceNote,
           });
-          return enterState("ST_ProductSuggestion");
+          return enterState(
+            "ST_ProductSuggestion",
+            "requirement.brand_confirmed_and_weight_selected"
+          );
         }
 
         onPrompt(weightOptionsPrompt);
@@ -877,7 +926,10 @@ export const createConversationController = ({
           deliveryDate: context.deliveryDate,
           note: context.riceNote,
         });
-        return enterState("ST_ProductSuggestion");
+        return enterState(
+          "ST_ProductSuggestion",
+          "requirement.brand_confirmed_with_inline_weight"
+        );
       }
 
       onPrompt(`「${context.riceBrand}」でよろしいですか？`);
@@ -889,6 +941,7 @@ export const createConversationController = ({
     // Weight choice flow
     // ─────────────────────────────────────────
     if (context.awaitingWeightChoice) {
+      onLog("[BRANCH] transcript.awaiting_weight_choice", { normalized });
       if (
         weightCandidate != null &&
         allowedRiceWeights.includes(weightCandidate as any)
@@ -904,7 +957,7 @@ export const createConversationController = ({
           deliveryDate: context.deliveryDate,
           note: context.riceNote,
         });
-        return enterState("ST_ProductSuggestion");
+        return enterState("ST_ProductSuggestion", "requirement.weight_selected");
       }
 
       onPrompt(weightOptionsPrompt);
@@ -929,13 +982,21 @@ export const createConversationController = ({
         deliveryDate: context.deliveryDate,
         note: context.riceNote,
       });
-      return enterState("ST_ProductSuggestion");
+      return enterState(
+        "ST_ProductSuggestion",
+        "requirement.weight_selected_after_brand_confirmed"
+      );
     }
 
     // ─────────────────────────────────────────
     // Extract brand
     // ─────────────────────────────────────────
     if (brandCandidate) {
+      onLog("[BRANCH] transcript.brand_candidate", {
+        normalized,
+        brand: brandCandidate.brand,
+        confidence: brandCandidate.confidence,
+      });
       context.riceBrand = brandCandidate.brand;
       context.brandConfirmed = false;
       context.awaitingBrandConfirm = true;
@@ -971,6 +1032,10 @@ export const createConversationController = ({
     // Extract weight (brand not found)
     // ─────────────────────────────────────────
     if (weightCandidate != null) {
+      onLog("[BRANCH] transcript.weight_without_brand", {
+        normalized,
+        weightKg: weightCandidate,
+      });
       onPrompt("銘柄を教えてください。");
       startSilenceTimer();
       return;
@@ -1002,9 +1067,13 @@ export const createConversationController = ({
       }
 
       if (state === "ST_PriceQuote") {
-        if (isYes(normalized)) return enterState("ST_AddressConfirm");
-        if (isNo(normalized)) return enterState("ST_ProductSuggestion");
-        return enterState("ST_ProductSuggestion");
+        if (isYes(normalized)) {
+          return enterState("ST_AddressConfirm", "pricequote.accepted");
+        }
+        if (isNo(normalized)) {
+          return enterState("ST_ProductSuggestion", "pricequote.rejected");
+        }
+        return enterState("ST_ProductSuggestion", "pricequote.unknown_treated_as_reject");
       }
 
       if (state === "ST_AddressConfirm") {
@@ -1019,7 +1088,7 @@ export const createConversationController = ({
               deliveryDate: context.deliveryDate,
               note: context.riceNote,
             });
-            return enterState("ST_DeliveryCheck");
+            return enterState("ST_DeliveryCheck", "addressconfirm.accepted");
           }
           if (isNo(normalized)) {
             context.address = undefined;
@@ -1061,24 +1130,28 @@ export const createConversationController = ({
           if (isYes(normalized)) {
             context.awaitingDeliveryCancelConfirm = false;
             context.closingReason = "cancel";
-            return enterState("ST_Closing");
+            return enterState("ST_Closing", "deliverycheck.cancel_confirmed");
           }
           if (isNo(normalized)) {
             context.awaitingDeliveryCancelConfirm = false;
             // 「キャンセルしない」＝その配送日で進める
-            return enterState("ST_OrderConfirmation");
+            return enterState("ST_OrderConfirmation", "deliverycheck.cancel_declined");
           }
           onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
           startSilenceTimer();
           return;
         }
 
-        if (isYes(normalized)) return enterState("ST_OrderConfirmation");
+        if (isYes(normalized)) return enterState("ST_OrderConfirmation", "deliverycheck.accepted");
+        if (isDateLikeInput(normalized)) {
+          onLog("[BRANCH] deliverycheck.date_like_accepted", { text: normalized });
+          return enterState("ST_OrderConfirmation", "deliverycheck.date_like_accepted");
+        }
         if (isNo(normalized)) {
           context.deliveryRetries += 1;
           if (context.deliveryRetries > config.deliveryRetryMax) {
             context.closingReason = "cancel";
-            return enterState("ST_Closing");
+            return enterState("ST_Closing", "deliverycheck.retry_exhausted");
           }
           context.awaitingDeliveryCancelConfirm = true;
           onPrompt("配送日の変更はできません。キャンセルしますか？（はい／いいえ）");
@@ -1102,14 +1175,14 @@ export const createConversationController = ({
             deliveryDate: context.deliveryDate,
             note: context.riceNote,
           });
-          return enterState("ST_OrderConfirmation");
+          return enterState("ST_OrderConfirmation", "orderconfirm.phone_captured");
         }
 
         if (isYes(normalized)) {
           return handleSaveOrder();
         }
         context.closingReason = "cancel";
-        return enterState("ST_Closing");
+        return enterState("ST_Closing", "orderconfirm.rejected");
       }
 
       onLog("transcript.noinfo", { text: normalized, state });
@@ -1120,7 +1193,7 @@ export const createConversationController = ({
   const handleSaveOrder = async () => {
     if (!context.product || context.price == null || !context.deliveryDate || !context.customerPhone) {
       context.closingReason = "error";
-      return enterState("ST_Closing");
+      return enterState("ST_Closing", "saveorder.missing_requirements");
     }
 
     if (!context.address || !context.addressConfirmed) {
@@ -1129,7 +1202,7 @@ export const createConversationController = ({
         address: context.address,
         addressConfirmed: context.addressConfirmed,
       });
-      return enterState("ST_AddressConfirm");
+      return enterState("ST_AddressConfirm", "saveorder.address_unconfirmed");
     }
 
     const payload = {
@@ -1145,7 +1218,7 @@ export const createConversationController = ({
       const result = await toolClient.saveOrder(payload);
       context.orderId = result.orderId;
       context.closingReason = "success";
-      return enterState("ST_Closing");
+      return enterState("ST_Closing", "saveorder.success");
     } catch (err) {
       onLog("saveOrder failed", err);
       if (context.orderRetries < config.orderRetryMax) {
@@ -1154,12 +1227,12 @@ export const createConversationController = ({
         return handleSaveOrder();
       }
       context.closingReason = "error";
-      return enterState("ST_Closing");
+      return enterState("ST_Closing", "saveorder.retry_exhausted");
     }
   };
 
   return {
-    start: () => enterState("ST_Greeting"),
+    start: () => enterState("ST_Greeting", "start"),
 
     onUserTranscript: (text: string, confidence: number | null) =>
       handleUserTranscript(text, confidence),
@@ -1194,7 +1267,7 @@ export const createConversationController = ({
         return;
       }
       if (state === "ST_ProductSuggestion") {
-        void enterState("ST_StockCheck").catch((err) =>
+        void enterState("ST_StockCheck", "productsuggestion.prompt_done").catch((err) =>
           onLog("state.transition.failed", err)
         );
         return;
