@@ -301,6 +301,8 @@ wss.on("connection", (ws: WebSocket) => {
   let lastTwilioAudioSentAt = 0;
   const cancelDedupWindowMs = 1200;
   const bargeInCancelFallbackMs = 180;
+  const interruptResponseEnabled =
+    config.realtimeInterruptResponse && config.bargeInCancelEnabled;
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
@@ -322,7 +324,8 @@ wss.on("connection", (ws: WebSocket) => {
       audioMode === "pcmu"
         ? "inbound passthrough / outbound enforced pcmu@8k"
         : `inbound pcmu->pcm16@${outputSampleRate} / outbound pcm16->pcmu@8k`,
-    interruptResponse: config.realtimeInterruptResponse,
+    interruptResponseConfigured: config.realtimeInterruptResponse,
+    interruptResponseEnabled,
     bargeInMinSpeechMs: config.bargeInMinSpeechMs,
     realtimeVadSilenceMs: config.realtimeVadSilenceMs,
   });
@@ -1027,7 +1030,7 @@ wss.on("connection", (ws: WebSocket) => {
           type: "server_vad",
           silence_duration_ms: config.realtimeVadSilenceMs,
           create_response: false,
-          interrupt_response: config.realtimeInterruptResponse,
+          interrupt_response: interruptResponseEnabled,
         },
       };
       const payload = useAudioSchema
@@ -1070,7 +1073,7 @@ wss.on("connection", (ws: WebSocket) => {
               type: "server_vad",
               silence_duration_ms: config.realtimeVadSilenceMs,
               create_response: false,
-              interrupt_response: config.realtimeInterruptResponse,
+              interrupt_response: interruptResponseEnabled,
             },
           },
         };
@@ -1322,7 +1325,7 @@ wss.on("connection", (ws: WebSocket) => {
           itemId,
           eligibleForBargeIn,
         };
-        if (config.realtimeInterruptResponse) {
+        if (interruptResponseEnabled) {
           console.log(`${logPrefix(wsId)} bargein pending`, {
             source: "speech_started",
             itemId,
@@ -1340,7 +1343,7 @@ wss.on("connection", (ws: WebSocket) => {
         conversation.onSpeechStarted();
       }
       if (payload.type === "input_audio_buffer.speech_stopped") {
-        if (config.realtimeInterruptResponse) {
+        if (interruptResponseEnabled) {
           const audioEndMs = (payload as { audio_end_ms?: unknown }).audio_end_ms;
           const speechDurationMs =
             typeof pendingBargeInSpeech?.audioStartMs === "number" && typeof audioEndMs === "number"
@@ -1480,7 +1483,7 @@ wss.on("connection", (ws: WebSocket) => {
           }
           if (
             config.featureInboundDropWhileAssistant &&
-            !config.realtimeInterruptResponse &&
+            !interruptResponseEnabled &&
             (responseActive || responsePending || pendingPlaybackMarkName !== null)
           ) {
             droppedAssistantOverlapMediaCount += 1;
@@ -1490,7 +1493,7 @@ wss.on("connection", (ws: WebSocket) => {
             ) {
               console.log(`${logPrefix(wsId)} drop media while assistant speaking`, {
                 reason:
-                  "FEATURE_INBOUND_DROP_WHILE_ASSISTANT=1 and REALTIME_INTERRUPT_RESPONSE=0",
+                  "FEATURE_INBOUND_DROP_WHILE_ASSISTANT=1 and interruptResponseEnabled=false",
                 responseActive,
                 responsePending,
                 pendingPlaybackMarkName,
@@ -1606,8 +1609,11 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 server.listen(config.port, () => {
+  const interruptResponseEnabled =
+    config.realtimeInterruptResponse && config.bargeInCancelEnabled;
   const runtimeKnobs = {
-    interruptResponse: config.realtimeInterruptResponse,
+    interruptResponseConfigured: config.realtimeInterruptResponse,
+    interruptResponseEnabled,
     bargeInCancelEnabled: config.bargeInCancelEnabled,
     vadSilenceMs: config.realtimeVadSilenceMs,
     maxResponseOutputTokens: config.realtimeMaxResponseOutputTokens ?? "default",
@@ -1619,7 +1625,7 @@ server.listen(config.port, () => {
       enabled: config.featureInboundDropWhileAssistant,
       activeInCurrentMode:
         config.featureInboundDropWhileAssistant &&
-        !config.realtimeInterruptResponse,
+        !interruptResponseEnabled,
       dropConditions: ["responseActive", "responsePending", "pendingPlaybackMarkName"],
     },
     twilioPlaybackMarkGuard: {
