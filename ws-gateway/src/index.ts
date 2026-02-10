@@ -34,6 +34,23 @@ const safeJson = (data: string): unknown => {
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
 
+const buildVerbatimInstructions = (verbatimText: string) =>
+  [
+    "次の文章を一字一句そのまま読み上げてください。",
+    "言い換え・補足・前置き・語尾の追加は禁止です。",
+    "文章の内容を変えず、ちょうど同じ文字列で出力してください。",
+    "",
+    "=== 読み上げ文 ===",
+    verbatimText,
+  ].join("\n");
+
+const sanitizeReadAloudText = (text: string) =>
+  text
+    .replace(/（\s*例\s*[:：][^）]*）/g, "")
+    .replace(/\(\s*例\s*[:：][^)]*\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
 const extractContentText = (content: unknown): string | null => {
   if (!Array.isArray(content)) return null;
   for (const part of content) {
@@ -58,7 +75,9 @@ const extractUserTranscript = (
       (payload as { text?: string }).text;
     const confidence = (payload as { confidence?: number }).confidence;
     if (typeof text === "string" && text.trim()) {
-      return { text, confidence: Number.isFinite(confidence) ? confidence : null };
+      const parsedConfidence =
+        typeof confidence === "number" && Number.isFinite(confidence) ? confidence : null;
+      return { text, confidence: parsedConfidence };
     }
   }
   if (payload.type === "conversation.item.input_audio_transcription.completed") {
@@ -253,6 +272,8 @@ wss.on("connection", (ws: WebSocket) => {
   const minCommitSamples = Math.ceil(outputSampleRate / 10);
   const vadEnabled = true;
   let pendingTranscript: { text: string; confidence: number | null; ts: number } | null = null;
+  const interruptResponseEnabled =
+    config.realtimeInterruptResponse && config.bargeInCancelEnabled;
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
@@ -270,6 +291,10 @@ wss.on("connection", (ws: WebSocket) => {
         ? "g711_ulaw"
         : "pcm16",
     conversion: audioMode === "pcmu" ? "passthrough" : `pcmu->pcm16@${outputSampleRate}`,
+    interruptResponseConfigured: config.realtimeInterruptResponse,
+    interruptResponseEnabled,
+    bargeInCancelEnabled: config.bargeInCancelEnabled,
+    realtimeVadSilenceMs: config.realtimeVadSilenceMs,
   });
 
   const sendToRealtime = (payload: object) => {
@@ -354,12 +379,22 @@ wss.on("connection", (ws: WebSocket) => {
   }
 
   const createResponse = (instructions?: string) => {
-    if (!instructions) return;
+    const originalText = instructions?.trim();
+    if (!originalText) return;
+    const spokenText = sanitizeReadAloudText(originalText);
+    if (!spokenText) return;
+    if (spokenText !== originalText) {
+      console.log(`${logPrefix(wsId)} response prompt sanitized`, {
+        original: originalText,
+        spoken: spokenText,
+      });
+    }
     if (responseActive || responsePending) {
-      queuedPrompt = instructions;
+      queuedPrompt = spokenText;
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
+    const responseInstruction = buildVerbatimInstructions(spokenText);
     const payload = useAudioSchema
       ? {
           type: "response.create",
@@ -373,7 +408,7 @@ wss.on("connection", (ws: WebSocket) => {
                 voice: "alloy",
               },
             },
-            ...(instructions ? { instructions } : {}),
+            instructions: responseInstruction,
           },
         }
       : {
@@ -382,7 +417,7 @@ wss.on("connection", (ws: WebSocket) => {
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
-            ...(instructions ? { instructions } : {}),
+            instructions: responseInstruction,
           },
         };
     logOutgoing("response.create", payload);
@@ -391,7 +426,7 @@ wss.on("connection", (ws: WebSocket) => {
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "assistant",
-        content: instructions,
+        content: spokenText,
         started_at: new Date().toISOString(),
         ended_at: new Date().toISOString(),
       });
@@ -522,9 +557,9 @@ wss.on("connection", (ws: WebSocket) => {
         transcription: { model: config.realtimeTranscriptionModel },
         turn_detection: {
           type: "server_vad",
-          silence_duration_ms: 800,
+          silence_duration_ms: config.realtimeVadSilenceMs,
           create_response: false,
-          interrupt_response: true,
+          interrupt_response: interruptResponseEnabled,
         },
       };
       const payload = useAudioSchema
@@ -557,9 +592,9 @@ wss.on("connection", (ws: WebSocket) => {
             input_audio_transcription: { model: config.realtimeTranscriptionModel },
             turn_detection: {
               type: "server_vad",
-              silence_duration_ms: 800,
+              silence_duration_ms: config.realtimeVadSilenceMs,
               create_response: false,
-              interrupt_response: true,
+              interrupt_response: interruptResponseEnabled,
             },
           },
         };
@@ -849,7 +884,15 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 server.listen(config.port, () => {
+  const runtimeKnobs = {
+    interruptResponseConfigured: config.realtimeInterruptResponse,
+    interruptResponseEnabled:
+      config.realtimeInterruptResponse && config.bargeInCancelEnabled,
+    bargeInCancelEnabled: config.bargeInCancelEnabled,
+    vadSilenceMs: config.realtimeVadSilenceMs,
+  };
   console.log(`WS gateway listening on :${config.port}`);
   console.log(`Realtime URL: ${config.realtimeUrl}`);
   console.log(`Realtime model: ${config.realtimeModel}`);
+  console.log("Runtime knobs:", runtimeKnobs);
 });

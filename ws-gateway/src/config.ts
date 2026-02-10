@@ -10,6 +10,9 @@ export const config = {
   realtimeAudioRate: Number(process.env.REALTIME_AUDIO_RATE || 24000),
   realtimeCommitFrames: Number(process.env.REALTIME_COMMIT_FRAMES || 50),
   realtimeTranscriptionModel: process.env.REALTIME_TRANSCRIPTION_MODEL || "",
+  realtimeInterruptResponse: process.env.REALTIME_INTERRUPT_RESPONSE !== "0",
+  bargeInCancelEnabled: process.env.BARGE_IN_CANCEL === "1",
+  realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 800),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
     "You are a helpful assistant. Always respond in Japanese. Keep responses to one short sentence and wait for the user's reply.",

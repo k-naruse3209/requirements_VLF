@@ -54,8 +54,8 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
 };
 
 (async () => {
-  assert.equal(extractRiceBrand("コシヒカリ"), "コシヒカリ");
-  assert.equal(extractRiceBrand("こしひかり"), "コシヒカリ");
+  assert.equal(extractRiceBrand("コシヒカリ")?.brand, "コシヒカリ");
+  assert.equal(extractRiceBrand("こしひかり")?.brand, "コシヒカリ");
   assert.equal(extractWeightKg("5kg"), 5);
   assert.equal(extractWeightKg("五キロ"), 5);
 
