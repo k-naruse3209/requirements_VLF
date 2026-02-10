@@ -1535,7 +1535,21 @@ wss.on("connection", (ws: WebSocket) => {
 });
 
 server.listen(config.port, () => {
+  const runtimeKnobs = {
+    interruptResponse: config.realtimeInterruptResponse,
+    vadSilenceMs: config.realtimeVadSilenceMs,
+    inboundMediaDropGuard: {
+      enabledWhenInterruptResponseOff: true,
+      activeInCurrentMode: !config.realtimeInterruptResponse,
+      dropConditions: ["responseActive", "responsePending", "pendingPlaybackMarkName"],
+    },
+    twilioPlaybackMarkGuard: {
+      enabled: true,
+      timeoutMs: config.twilioPlaybackMarkTimeoutMs,
+    },
+  };
   console.log(`WS gateway listening on :${config.port}`);
   console.log(`Realtime URL: ${config.realtimeUrl}`);
   console.log(`Realtime model: ${config.realtimeModel}`);
+  console.log("Runtime knobs:", runtimeKnobs);
 });
