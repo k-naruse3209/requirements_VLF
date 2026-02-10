@@ -11,6 +11,14 @@
 - `ws-gateway` tests: PASS (`rice-test`, `audio-test`)
 - Current tests are mostly unit/smoke; several spec-level transitions are not covered (see findings).
 
+## Update (2026-02-10)
+- D-1（後段状態での要件抽出暴走）を修正。
+  - `ws-gateway/src/conversation.ts` で要件抽出を `ST_RequirementCheck` 系のみに限定。
+  - 後段状態でブランド/重量らしき入力が来た場合は `requirement.extract_ignored` をログし、状態固有分岐を優先。
+- 再発防止としてテスト追加。
+  - `ws-gateway/scripts/rice_flow_test.ts` に case12 を追加し、`ST_PriceQuote` で銘柄入力しても要件抽出に戻らないことを検証。
+- 検証結果: `npm run verify` PASS。
+
 ## Findings (Ticket-ready)
 
 ### A. 未実装
@@ -140,14 +148,15 @@
 #### D-1. 米要件抽出が全状態で実行され、後段状態から要件状態へ逸脱し得る
 - Priority: P0
 - Category: 状態遷移の抜け
+- Status: Resolved on `codex/spec-ex-correction-consistency` (2026-02-10)
 - Spec evidence:
   - `docs/ConversationSpec.md:265`
   - `docs/ConversationSpec.md:274`
   - `docs/ConversationSpec.md:276`
 - Impl evidence:
-  - `ws-gateway/src/conversation.ts:801`
-  - `ws-gateway/src/conversation.ts:938`
-  - `ws-gateway/src/conversation.ts:973`
+  - `ws-gateway/src/conversation.ts:894`
+  - `ws-gateway/src/conversation.ts:902`
+  - `ws-gateway/src/conversation.ts:1076`
 - Current:
   - `brand/weight` 抽出が state 非依存で走るため、`ST_AddressConfirm` や `ST_DeliveryCheck` でも要件収集系プロンプトに逸脱可能。
 - Fix proposal:

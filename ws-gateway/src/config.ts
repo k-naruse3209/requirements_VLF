@@ -20,6 +20,7 @@ export const config = {
   realtimeInterruptResponse: process.env.REALTIME_INTERRUPT_RESPONSE === "1",
   // Send Twilio clear only when outbound audio was sent recently.
   bargeInTwilioClearWindowMs: Number(process.env.BARGE_IN_CLEAR_WINDOW_MS || 1800),
+  echoSuppressionMs: Number(process.env.ECHO_SUPPRESSION_MS || 2000),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
     "You are a helpful assistant. Always respond in Japanese. Keep responses to one short sentence and wait for the user's reply.",

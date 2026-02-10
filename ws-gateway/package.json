@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:conversation-log": "node scripts/dev_conversation_log.mjs",
     "smoke": "tsx scripts/realtime_smoke_test.ts",
     "rice-test": "tsx scripts/rice_flow_test.ts",
     "audio-test": "tsx scripts/audio_format_test.ts",

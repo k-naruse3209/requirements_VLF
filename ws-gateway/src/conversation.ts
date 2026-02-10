@@ -153,12 +153,10 @@ const riceBrandDictionary: Record<string, string[]> = {
   コシヒカリ: [
     "こしひかり",
     "こし光",
-    "こしひkari",
     "越光",
     "越ひかり",
     "腰光",
     "こしひ",
-    "こし",
   ],
   あきたこまち: [
     "あきたこまち",
@@ -166,11 +164,10 @@ const riceBrandDictionary: Record<string, string[]> = {
     "あきた小町",
     "秋田小町",
     "あきたこま",
-    "あきた",
   ],
   ひとめぼれ: ["ひとめぼれ", "一目ぼれ", "一目惚れ", "ひとめ"],
-  ゆめぴりか: ["ゆめぴりか", "夢ぴりか", "ゆめぴ"],
-  ななつぼし: ["ななつぼし", "七つ星", "ななつ"],
+  ゆめぴりか: ["ゆめぴりか", "夢ぴりか"],
+  ななつぼし: ["ななつぼし", "七つ星"],
 };
 
 const defaultRiceWeights = [5, 10, 20];
@@ -248,23 +245,31 @@ const isFuzzyAcceptable = (distance: number, keyLength: number) => {
 
 export const extractRiceBrand = (text: string) => {
   const normalized = normalizeBrandText(text);
+  if (!normalized || normalized.length < 3) return null;
   let best: string | null = null;
   let bestLength = 0;
   let bestDistance = Number.POSITIVE_INFINITY;
   let confidence: "exact" | "fuzzy" = "exact";
+  const minExactTokenLength = 3;
+  const minFuzzyTokenLength = 5;
   for (const [canonical, variants] of Object.entries(riceBrandDictionary)) {
     for (const variant of variants) {
       const key = normalizeBrandText(variant);
       if (!key) continue;
-      if (normalized.includes(key) && key.length > bestLength) {
+      if (key.length >= minExactTokenLength && normalized.includes(key) && key.length > bestLength) {
         best = canonical;
         bestLength = key.length;
         bestDistance = 0;
         confidence = "exact";
         continue;
       }
+      if (key.length < minFuzzyTokenLength) continue;
       const distance = bestDistanceInText(normalized, key);
-      if (distance > 0 && isFuzzyAcceptable(distance, key.length)) {
+      if (
+        distance > 0 &&
+        isFuzzyAcceptable(distance, key.length) &&
+        distance / key.length <= 0.35
+      ) {
         if (best == null || distance < bestDistance) {
           best = canonical;
           bestLength = key.length;
@@ -871,8 +876,27 @@ export const createConversationController = ({
       }
     }
 
-    const brandCandidate = extractRiceBrand(normalized);
-    const hasInfo = Boolean(weightCandidate != null || brandCandidate);
+    let brandCandidate = extractRiceBrand(normalized);
+    if (!brandCandidate && weightCandidate != null) {
+      const compact = normalizeRiceText(normalized);
+      // Accept short aliases only when a concrete weight is present in the same utterance.
+      if (/こし(?:ひ|ひかり)?(?=[0-9一二三四五六七八九十零]|$)/.test(compact) || /腰光|越光/.test(compact)) {
+        brandCandidate = { brand: "コシヒカリ", confidence: "fuzzy" };
+      } else if (/あきた(?:こまち)?(?=[0-9一二三四五六七八九十零]|$)/.test(compact)) {
+        brandCandidate = { brand: "あきたこまち", confidence: "fuzzy" };
+      } else if (/ゆめぴりか(?=[0-9一二三四五六七八九十零]|$)/.test(compact)) {
+        brandCandidate = { brand: "ゆめぴりか", confidence: "fuzzy" };
+      }
+    }
+    let hasInfo = Boolean(weightCandidate != null || brandCandidate);
+
+    const requirementExtractionActive =
+      state === "ST_RequirementCheck" ||
+      context.awaitingBrandConfirm ||
+      context.awaitingWeightChoice ||
+      (context.brandConfirmed &&
+        Boolean(context.riceBrand) &&
+        context.riceWeightKg == null);
 
     if (!allowFreeText && !hasInfo && !isJapaneseLike(normalized)) {
       onLog("transcript.skip_non_japanese", { text: normalized });
@@ -882,10 +906,7 @@ export const createConversationController = ({
     const milling = extractMilling(normalized);
     if (milling) context.riceMilling = milling;
 
-    // ─────────────────────────────────────────
-    // Brand confirm flow
-    // ─────────────────────────────────────────
-    if (context.awaitingBrandConfirm && context.riceBrand) {
+    if (requirementExtractionActive && context.awaitingBrandConfirm && context.riceBrand) {
       onLog("[BRANCH] transcript.awaiting_brand_confirm", { normalized });
       if (isYes(normalized)) {
         context.awaitingBrandConfirm = false;
@@ -953,10 +974,7 @@ export const createConversationController = ({
       return;
     }
 
-    // ─────────────────────────────────────────
-    // Weight choice flow
-    // ─────────────────────────────────────────
-    if (context.awaitingWeightChoice) {
+    if (requirementExtractionActive && context.awaitingWeightChoice) {
       onLog("[BRANCH] transcript.awaiting_weight_choice", { normalized });
       if (
         weightCandidate != null &&
@@ -982,6 +1000,7 @@ export const createConversationController = ({
     }
 
     if (
+      requirementExtractionActive &&
       context.brandConfirmed &&
       context.riceBrand &&
       context.riceWeightKg == null &&
@@ -1004,10 +1023,7 @@ export const createConversationController = ({
       );
     }
 
-    // ─────────────────────────────────────────
-    // Extract brand
-    // ─────────────────────────────────────────
-    if (brandCandidate) {
+    if (requirementExtractionActive && brandCandidate) {
       onLog("[BRANCH] transcript.brand_candidate", {
         normalized,
         brand: brandCandidate.brand,
@@ -1044,10 +1060,7 @@ export const createConversationController = ({
       return;
     }
 
-    // ─────────────────────────────────────────
-    // Extract weight (brand not found)
-    // ─────────────────────────────────────────
-    if (weightCandidate != null) {
+    if (requirementExtractionActive && weightCandidate != null) {
       onLog("[BRANCH] transcript.weight_without_brand", {
         normalized,
         weightKg: weightCandidate,
@@ -1055,6 +1068,16 @@ export const createConversationController = ({
       onPrompt("銘柄を教えてください。");
       startSilenceTimer();
       return;
+    }
+
+    if (!requirementExtractionActive && hasInfo) {
+      onLog("[BRANCH] requirement.extract_ignored", {
+        state,
+        text: normalized,
+        brandCandidate: brandCandidate?.brand ?? null,
+        weightCandidate: weightCandidate ?? null,
+      });
+      hasInfo = false;
     }
 
     // ─────────────────────────────────────────

@@ -161,6 +161,34 @@ const runSequence = async (
     assert.equal(state, "ST_RequirementCheck");
   });
 
+  await runCase("case11: もしもし", "もしもし", (state, ctx) => {
+    assert.equal(ctx.riceBrand, undefined);
+    assert.equal(ctx.riceWeightKg, undefined);
+    assert.equal(state, "ST_RequirementCheck");
+  });
+
+  {
+    const { controller } = makeController();
+    await bootstrap(controller);
+    await controller.onUserTranscript("コシヒカリ 5kg", 0.9);
+    await nextTick();
+    await controller.onUserTranscript("はい", 0.9);
+    await nextTick();
+    await controller.onUserTranscript("5kg", 0.9);
+    await nextTick();
+    assert.equal(controller.getState(), "ST_ProductSuggestion");
+    controller.onAssistantDone();
+    await nextTick();
+    assert.equal(controller.getState(), "ST_PriceQuote");
+    await controller.onUserTranscript("あきたこまち", 0.9);
+    await nextTick();
+    const ctx = controller.getContext();
+    assert.equal(controller.getState(), "ST_PriceQuote");
+    assert.equal(ctx.riceBrand, "コシヒカリ");
+    assert.equal(ctx.riceWeightKg, 5);
+    console.log("ok case12: non-requirement state ignores requirement extraction");
+  }
+
   console.log("All rice flow tests passed");
 })().catch((err) => {
   console.error(err);

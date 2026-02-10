@@ -248,7 +248,7 @@ wss.on("connection", (ws: WebSocket) => {
   let lastCommitAt = 0;
   let awaitingTranscriptUntil = 0;
   const transcriptWaitMs = 2000;
-  const echoSuppressionMs = 800;
+  const echoSuppressionMs = config.echoSuppressionMs;
   let bytesWindowStart = Date.now();
   let bytesInWindow = 0;
   let bytesInLastSecond = 0;
@@ -288,6 +288,24 @@ wss.on("connection", (ws: WebSocket) => {
 
   const sendToRealtime = (payload: object) => {
     if (!realtime || realtime.readyState !== WebSocket.OPEN) return;
+    const normalizeContentPart = (part: unknown) => {
+      if (!part || typeof part !== "object") return;
+      const record = part as { type?: unknown };
+      if (record.type === "input_text") {
+        record.type = "text";
+      }
+    };
+    const normalizeConversationItem = (value: unknown) => {
+      if (!value || typeof value !== "object") return;
+      const candidate = value as {
+        type?: unknown;
+        item?: { content?: unknown[] };
+      };
+      if (candidate.type !== "conversation.item.create") return;
+      if (!Array.isArray(candidate.item?.content)) return;
+      for (const part of candidate.item.content) normalizeContentPart(part);
+    };
+    normalizeConversationItem(payload);
     realtime.send(JSON.stringify(payload));
   };
 
@@ -458,7 +476,7 @@ wss.on("connection", (ws: WebSocket) => {
       item: {
         type: "message",
         role: "assistant",
-        content: [{ type: "input_text", text: spokenText }],
+        content: [{ type: "text", text: spokenText }],
       },
     };
     const payload = useAudioSchema
@@ -509,6 +527,9 @@ wss.on("connection", (ws: WebSocket) => {
 
   const flushAssistantTranscript = () => {
     if (!assistantTranscript.trim()) return;
+    console.log(
+      `${logPrefix(wsId)} [CONV] AI ${JSON.stringify({ text: assistantTranscript.trim() })}`
+    );
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
         role: "assistant",
@@ -519,6 +540,56 @@ wss.on("connection", (ws: WebSocket) => {
     }
     assistantTranscript = "";
     assistantTranscriptStartedAt = null;
+  };
+
+  const normalizeForCompare = (text: string) =>
+    text
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "");
+
+  const shouldSkipTranscript = (
+    transcript: { text: string; confidence: number | null },
+    source: "committed" | "queued"
+  ) => {
+    if (lastAssistantDoneAt && Date.now() - lastAssistantDoneAt < echoSuppressionMs) {
+      console.log(`${logPrefix(wsId)} skip transcript (cooldown)`, {
+        source,
+        text: transcript.text,
+        sinceMs: Date.now() - lastAssistantDoneAt,
+      });
+      return true;
+    }
+    const normalizedTranscript = normalizeForCompare(transcript.text);
+    const normalizedPrompt = normalizeForCompare(lastAssistantPrompt);
+    const echoWindowMs = 3000;
+    if (
+      normalizedPrompt &&
+      normalizedTranscript.length >= 4 &&
+      Date.now() - lastAssistantDoneAt < echoWindowMs &&
+      (normalizedPrompt.includes(normalizedTranscript) ||
+        normalizedTranscript.includes(normalizedPrompt))
+    ) {
+      console.log(`${logPrefix(wsId)} skip transcript (echo)`, { source, text: transcript.text });
+      return true;
+    }
+    return false;
+  };
+
+  const forwardUserTranscript = (
+    transcript: { text: string; confidence: number | null },
+    source: "committed" | "queued"
+  ) => {
+    if (shouldSkipTranscript(transcript, source)) return;
+    if (logClient && callLogId) {
+      logClient.appendMessage(callLogId, {
+        role: "user",
+        content: transcript.text,
+        started_at: new Date().toISOString(),
+        ended_at: new Date().toISOString(),
+      });
+    }
+    conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
 
   const processCommittedTurn = () => {
@@ -570,40 +641,7 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} queue transcript (assistant speaking)`, transcript.text);
       return;
     }
-    if (lastAssistantDoneAt && Date.now() - lastAssistantDoneAt < echoSuppressionMs) {
-      console.log(`${logPrefix(wsId)} skip transcript (cooldown)`, {
-        text: transcript.text,
-        sinceMs: Date.now() - lastAssistantDoneAt,
-      });
-      return;
-    }
-    const normalizeForCompare = (text: string) =>
-      text
-        .normalize("NFKC")
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}]+/gu, "");
-    const normalizedTranscript = normalizeForCompare(transcript.text);
-    const normalizedPrompt = normalizeForCompare(lastAssistantPrompt);
-    const echoWindowMs = 3000;
-    if (
-      normalizedPrompt &&
-      normalizedTranscript.length >= 4 &&
-      Date.now() - lastAssistantDoneAt < echoWindowMs &&
-      (normalizedPrompt.includes(normalizedTranscript) ||
-        normalizedTranscript.includes(normalizedPrompt))
-    ) {
-      console.log(`${logPrefix(wsId)} skip transcript (echo)`, transcript.text);
-      return;
-    }
-    if (logClient && callLogId) {
-      logClient.appendMessage(callLogId, {
-        role: "user",
-        content: transcript.text,
-        started_at: new Date().toISOString(),
-        ended_at: new Date().toISOString(),
-      });
-    }
-    conversation.onUserTranscript(transcript.text, transcript.confidence);
+    forwardUserTranscript(transcript, "committed");
   };
 
   const markCommitted = () => {
@@ -912,6 +950,12 @@ wss.on("connection", (ws: WebSocket) => {
           commitPending,
           commitAgeMs: lastCommitAt ? Date.now() - lastCommitAt : null,
         });
+        console.log(
+          `${logPrefix(wsId)} [CONV] USER ${JSON.stringify({
+            text: userTranscript.text,
+            confidence: userTranscript.confidence,
+          })}`
+        );
         pendingTranscript = { ...userTranscript, ts: Date.now() };
         processCommittedTurn();
       }
@@ -1036,7 +1080,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (queuedUserTranscript) {
           const queued = queuedUserTranscript;
           queuedUserTranscript = null;
-          conversation.onUserTranscript(queued.text, queued.confidence);
+          forwardUserTranscript(queued, "queued");
         }
         if (promptQueue.length > 0) {
           const pending = promptQueue.shift();
@@ -1063,7 +1107,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (queuedUserTranscript) {
           const queued = queuedUserTranscript;
           queuedUserTranscript = null;
-          conversation.onUserTranscript(queued.text, queued.confidence);
+          forwardUserTranscript(queued, "queued");
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
