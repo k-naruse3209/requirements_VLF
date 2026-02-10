@@ -111,6 +111,7 @@ Files:
 
 Action:
 - Enable `FEATURE_EXPLICIT_CONVERSATION_ITEM=1`, then `FEATURE_VERBATIM_WRAPPER=1` separately.
+- Fast-track option (when iteration speed is prioritized): enable `FEATURE_VERBATIM_WRAPPER=1`, `FEATURE_INBOUND_DROP_WHILE_ASSISTANT=1`, and `FEATURE_TWILIO_MARK_GUARD=1` in one batch after 2B passes, then attach one stricter evidence set (CallSid + state timeline + required realtime events + mark ack/no-timeout check).
 
 Pass criteria:
 - No repeated unsolicited turns.
