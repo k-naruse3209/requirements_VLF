@@ -50,7 +50,10 @@ Actions:
 
 Verification:
 - `npm run build`
-- `npm run verify`
+- `npm run rice-test`
+- Startup log review (attach snippet in PR):
+  - Start gateway once: `npm run dev`
+  - Confirm `Runtime knobs:` includes `interruptResponse`, `vadSilenceMs`, `inboundMediaDropGuard`, `twilioPlaybackMarkGuard`
 - One call evidence set: `CallSid`, `state.enter`, `response.created/done`, `input_audio_buffer.committed`, transcription completed.
 
 ---
@@ -74,7 +77,7 @@ Actions:
 
 Verification:
 - `npm run build`
-- `npm run verify`
+- `npm run rice-test`
 - One call evidence set and confirm no mid-utterance cut in greeting + first prompt.
 
 ---
@@ -155,6 +158,6 @@ Pass criteria:
 
 ## PR Review Checklist
 - Single feature toggle change per PR.
-- `npm run build` and `npm run verify` attached.
+- `npm run build` and `npm run rice-test` attached.
 - One call evidence set attached with CallSid.
 - No unrelated file changes.
