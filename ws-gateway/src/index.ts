@@ -66,6 +66,13 @@ const buildVerbatimInstructions = (verbatimText: string) => {
   ].join("\n");
 };
 
+const sanitizeReadAloudText = (text: string) =>
+  text
+    .replace(/（\s*例\s*[:：][^）]*）/g, "")
+    .replace(/\(\s*例\s*[:：][^)]*\)/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+
 const extractContentText = (content: unknown): string | null => {
   if (!Array.isArray(content)) return null;
   for (const part of content) {
@@ -495,8 +502,16 @@ wss.on("connection", (ws: WebSocket) => {
   }
 
   const createResponse = (instructions?: string) => {
-    const spokenText = instructions?.trim();
+    const originalText = instructions?.trim();
+    if (!originalText) return;
+    const spokenText = sanitizeReadAloudText(originalText);
     if (!spokenText) return;
+    if (spokenText !== originalText) {
+      console.log(`${logPrefix(wsId)} response prompt sanitized`, {
+        original: originalText,
+        spoken: spokenText,
+      });
+    }
     if (responseActive || responsePending) {
       promptQueue.push(spokenText);
       console.log(`${logPrefix(wsId)} queue response.create (active/pending)`, {
