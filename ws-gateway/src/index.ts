@@ -505,9 +505,8 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     const requestId = `gw_${Date.now()}_${++responseSeq}`;
-    const responseInstruction = config.featureVerbatimWrapper
-      ? buildVerbatimInstructions(spokenText)
-      : spokenText;
+    // Stability-first: force verbatim wrapper to reduce assistant paraphrasing.
+    const responseInstruction = buildVerbatimInstructions(spokenText);
     const responseOverrides =
       config.realtimeMaxResponseOutputTokens == null
         ? {}
@@ -1618,7 +1617,7 @@ server.listen(config.port, () => {
     vadSilenceMs: config.realtimeVadSilenceMs,
     maxResponseOutputTokens: config.realtimeMaxResponseOutputTokens ?? "default",
     explicitConversationItem: config.featureExplicitConversationItem,
-    verbatimWrapper: config.featureVerbatimWrapper,
+    verbatimWrapper: true,
     emptyCommitToNoHear: config.featureEmptyCommitToNoHear,
     nonJaToNoHear: config.featureNonJaToNoHear,
     inboundMediaDropGuard: {
