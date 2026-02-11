@@ -260,7 +260,7 @@ const shouldIgnoreTranscript = (text: string) => {
   if (extractRiceBrand(normalized)) return false;
   if (punctuationOnlyPattern.test(normalized)) return true;
   if (normalized.length < 2) return true;
-  if (!japaneseCharPattern.test(normalized) && normalized.length < 4) return true;
+  if (!japaneseCharPattern.test(normalized)) return true;
   return false;
 };
 
@@ -579,9 +579,9 @@ export const createConversationController = ({
     }
 
     if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
-      if (brandCandidate) {
+      if (brandCandidate?.confidence === "exact") {
         context.riceBrand = brandCandidate.brand;
-        context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
+        context.awaitingBrandConfirm = false;
         onInquiryUpdate({
           brand: context.riceBrand,
           weightKg: context.riceWeightKg,
@@ -596,9 +596,11 @@ export const createConversationController = ({
       return;
     }
 
-    if (brandCandidate) {
+    if (brandCandidate?.confidence === "exact") {
       context.riceBrand = brandCandidate.brand;
-      context.awaitingBrandConfirm = brandCandidate.confidence === "fuzzy";
+      context.awaitingBrandConfirm = false;
+    } else if (brandCandidate?.confidence === "fuzzy") {
+      onLog("brand.fuzzy.ignored", { text: normalized, candidate: brandCandidate.brand });
     }
     if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
       context.riceWeightKg = weightCandidate;
