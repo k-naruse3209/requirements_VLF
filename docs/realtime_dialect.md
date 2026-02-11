@@ -88,6 +88,14 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
 - Follow-up prompt on `transcript.noinfo` must focus on missing slots:
   - weight is known -> ask brand only; brand is known -> ask weight only.
   - avoid resetting to a generic "brand and weight" prompt when one slot is already captured.
+- Commit/transcript turn gating:
+  - Ignore `input_audio_buffer.committed` when no `input_audio_buffer.speech_started` was observed for that turn.
+  - Keep a short wait window for late transcription events so a valid committed turn is not dropped by event ordering.
+- Requirement-slot update scope:
+  - Brand/weight extraction and context updates are allowed only in `ST_Greeting` and `ST_RequirementCheck`.
+  - Non-requirement states (product suggestion, price, address, delivery, order confirmation) must not overwrite captured brand/weight slots.
+- Closing reason hardening:
+  - Default `closingReason` must be `error`; transition to `ST_Closing` with `success`/`cancel` only at explicit success or user-cancel points.
 
 ## Known Pitfalls
 - `session.audio` can be rejected by some models with `Unknown parameter`.

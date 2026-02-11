@@ -316,7 +316,7 @@ export const createConversationController = ({
     noHearRetries: 0,
     deliveryRetries: 0,
     orderRetries: 0,
-    closingReason: "success",
+    closingReason: "error",
     addressConfirmed: false,
     awaitingAddressConfirm: false,
     awaitingCategoryConfirm: false,
@@ -576,29 +576,28 @@ export const createConversationController = ({
 
     resetRetries();
 
-    const weightCandidate = extractWeightKg(normalized);
-    const brandCandidate = extractRiceBrand(normalized);
+    const isRequirementTurn = state === "ST_Greeting" || state === "ST_RequirementCheck";
+    const weightCandidate = isRequirementTurn ? extractWeightKg(normalized) : null;
+    const brandCandidate = isRequirementTurn ? extractRiceBrand(normalized) : null;
     const hasInfo = Boolean(weightCandidate != null || brandCandidate);
-    if (!hasInfo) {
-      if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
-        if (context.noHearRetries === 0) {
-          context.noHearRetries += 1;
-          if (!context.riceBrand && context.riceWeightKg) {
-            onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
-          } else if (context.riceBrand && !context.riceWeightKg) {
-            onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
-          } else {
-            onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
-          }
-          startSilenceTimer();
+    if (isRequirementTurn && !hasInfo) {
+      if (context.noHearRetries === 0) {
+        context.noHearRetries += 1;
+        if (!context.riceBrand && context.riceWeightKg) {
+          onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
+        } else if (context.riceBrand && !context.riceWeightKg) {
+          onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
         } else {
-          onLog("transcript.noinfo", { text: normalized });
+          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
         }
-        return;
+        startSilenceTimer();
+      } else {
+        onLog("transcript.noinfo", { text: normalized });
       }
+      return;
     }
 
-    if (weightCandidate != null && !isValidWeightKg(weightCandidate)) {
+    if (isRequirementTurn && weightCandidate != null && !isValidWeightKg(weightCandidate)) {
       if (brandCandidate?.confidence === "exact") {
         context.riceBrand = brandCandidate.brand;
         context.awaitingBrandConfirm = false;
@@ -616,23 +615,25 @@ export const createConversationController = ({
       return;
     }
 
-    if (brandCandidate?.confidence === "exact") {
-      context.riceBrand = brandCandidate.brand;
-      context.awaitingBrandConfirm = false;
-    } else if (brandCandidate?.confidence === "fuzzy") {
-      onLog("brand.fuzzy.ignored", { text: normalized, candidate: brandCandidate.brand });
-    }
-    if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
-      context.riceWeightKg = weightCandidate;
-    }
-    if (context.riceBrand || context.riceWeightKg) {
-      onInquiryUpdate({
-        brand: context.riceBrand,
-        weightKg: context.riceWeightKg,
-        deliveryAddress: context.address,
-        deliveryDate: context.deliveryDate,
-        note: context.riceNote,
-      });
+    if (isRequirementTurn) {
+      if (brandCandidate?.confidence === "exact") {
+        context.riceBrand = brandCandidate.brand;
+        context.awaitingBrandConfirm = false;
+      } else if (brandCandidate?.confidence === "fuzzy") {
+        onLog("brand.fuzzy.ignored", { text: normalized, candidate: brandCandidate.brand });
+      }
+      if (weightCandidate != null && isValidWeightKg(weightCandidate)) {
+        context.riceWeightKg = weightCandidate;
+      }
+      if (context.riceBrand || context.riceWeightKg) {
+        onInquiryUpdate({
+          brand: context.riceBrand,
+          weightKg: context.riceWeightKg,
+          deliveryAddress: context.address,
+          deliveryDate: context.deliveryDate,
+          note: context.riceNote,
+        });
+      }
     }
 
     if (config.correctionKeywords.some((keyword) => normalized.includes(keyword))) {
