@@ -106,6 +106,8 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
   - `createResponse` must also defer send when session is not ready (double guard against early `response.create`).
   - Wrap each `response.create.instructions` with strict verbatim read-aloud directives (`<read_aloud>...</read_aloud>`), and treat the tag body as the only allowed utterance.
   - Send prompts as out-of-band responses (`response.conversation: "none"`, `response.input: []`) to prevent drift from prior conversation items.
+- Catalog fallback guard:
+  - If `PRODUCT_CATALOG_PATH` is unset or empty, ws-gateway must use an in-memory fallback rice catalog (no price fields) so `ST_ProductSuggestion` does not immediately fail.
 
 ## Call Transcript Extraction (offline)
 - ws-gateway logs now emit one-line JSON conversation events:

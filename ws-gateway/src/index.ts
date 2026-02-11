@@ -195,17 +195,29 @@ const downsample = (input: Int16Array, factor: number) => {
   return output;
 };
 
+const fallbackCatalog: Product[] = [
+  { id: "rice-koshihikari", name: "コシヒカリ", category: "コシヒカリ" },
+  { id: "rice-akitakomachi", name: "あきたこまち", category: "あきたこまち" },
+  { id: "rice-yumepirika", name: "ゆめぴりか", category: "ゆめぴりか" },
+  { id: "rice-hitomebore", name: "ひとめぼれ", category: "ひとめぼれ" },
+  { id: "rice-nanatsuboshi", name: "ななつぼし", category: "ななつぼし" },
+];
+
 const loadCatalog = (): Product[] => {
-  if (!config.productCatalogPath) return [];
+  if (!config.productCatalogPath) {
+    console.warn("[catalog] PRODUCT_CATALOG_PATH not set; using fallback catalog");
+    return fallbackCatalog;
+  }
   try {
     const raw = fs.readFileSync(config.productCatalogPath, "utf8");
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed as Product[];
-    if (Array.isArray(parsed?.items)) return parsed.items as Product[];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as Product[];
+    if (Array.isArray(parsed?.items) && parsed.items.length > 0) return parsed.items as Product[];
+    console.warn("[catalog] loaded catalog is empty; using fallback catalog");
   } catch (err) {
     console.error("[catalog] failed to load", err);
   }
-  return [];
+  return fallbackCatalog;
 };
 
 const productCatalog = loadCatalog();
