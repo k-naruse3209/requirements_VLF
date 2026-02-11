@@ -41,6 +41,17 @@ const sanitizeReadAloudText = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const buildVerbatimInstruction = (spokenText: string) =>
+  [
+    "あなたは電話自動応答システムの音声レンダラーです。",
+    "次の<read_aloud>タグ内の本文だけを、一字一句そのまま読み上げてください。",
+    "タグは読み上げないでください。",
+    "本文以外の語句は一切追加しないでください。",
+    "言い換え・要約・補足・提案・質問の追加・推測は禁止です。",
+    "読み上げは一度だけ行い、本文を読み終えたら停止してください。",
+    `<read_aloud>${spokenText}</read_aloud>`,
+  ].join("\n");
+
 const normalizeSpokenForCompare = (text: string) =>
   text
     .normalize("NFKC")
@@ -435,7 +446,7 @@ wss.on("connection", (ws: WebSocket) => {
       return;
     }
     expectedAssistantTranscript = spokenText;
-    const responseInstruction = spokenText;
+    const responseInstruction = buildVerbatimInstruction(spokenText);
     const payload = useAudioSchema
       ? {
           type: "response.create",
