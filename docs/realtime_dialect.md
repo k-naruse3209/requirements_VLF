@@ -56,9 +56,26 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
 - `REALTIME_SCHEMA`: `flat` or `audio`
 - `REALTIME_AUDIO_RATE`: output/input sample rate for audio schema (default `24000`)
 - `REALTIME_COMMIT_FRAMES`: Twilio frame count before commit in ws-gateway (default `50`)
+- `REALTIME_INTERRUPT_RESPONSE`: `0` disables server-side interrupt (default `1`)
+- `BARGE_IN_CANCEL`: `1` enables gateway-side barge-in cancel (default `0`)
+- `REALTIME_VAD_SILENCE_MS`: server VAD silence tail in ms (default `800`)
 - `RUNS`: number of consecutive success runs (default `10`)
 - `AUDIO_MS`: input audio duration in ms (default `600`)
 - `TIMEOUT_MS`: per-run timeout (default `8000`)
+
+## Voice Stability Profile (flat schema)
+- Runtime startup logs must include:
+  - `interruptResponseConfigured`
+  - `interruptResponseEnabled`
+  - `bargeInCancelEnabled`
+  - `vadSilenceMs`
+- To avoid mid-utterance cut in the current Twilio flow, run with:
+  - `BARGE_IN_CANCEL=0`
+  - `REALTIME_INTERRUPT_RESPONSE=1`
+  - effective behavior becomes `interruptResponseEnabled=false` (logged at startup)
+- Read-aloud prompt handling:
+  - Response instructions are wrapped in a strict verbatim template.
+  - Example markers such as `（例: コシヒカリ）` / `(例: 5kg)` are stripped before read-aloud.
 
 ## Known Pitfalls
 - `session.audio` can be rejected by some models with `Unknown parameter`.
