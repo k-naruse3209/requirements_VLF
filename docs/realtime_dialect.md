@@ -83,6 +83,9 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
 - ASR noise hardening for brand extraction:
   - Non-Japanese transcripts are ignored before state updates.
   - Fuzzy brand candidates are logged (`brand.fuzzy.ignored`) and not applied to context/state transitions.
+- Follow-up prompt on `transcript.noinfo` must focus on missing slots:
+  - weight is known -> ask brand only; brand is known -> ask weight only.
+  - avoid resetting to a generic "brand and weight" prompt when one slot is already captured.
 
 ## Known Pitfalls
 - `session.audio` can be rejected by some models with `Unknown parameter`.
