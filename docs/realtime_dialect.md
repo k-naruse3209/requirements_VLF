@@ -74,7 +74,7 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
   - `REALTIME_INTERRUPT_RESPONSE=1`
   - effective behavior becomes `interruptResponseEnabled=false` (logged at startup)
 - Read-aloud prompt handling:
-  - Response instructions are wrapped in a strict verbatim template.
+  - Response instructions must contain only the user-audible utterance text (no meta prompt wrapper).
   - Example markers such as `（例: コシヒカリ）` / `(例: 5kg)` are stripped before read-aloud.
 
 ### Additional Stability Guardrails (2026-02-11)
@@ -83,6 +83,8 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
 - ASR noise hardening for brand extraction:
   - Non-Japanese transcripts are ignored before state updates.
   - Fuzzy brand candidates are logged (`brand.fuzzy.ignored`) and not applied to context/state transitions.
+  - Known ASR alias variants can be promoted to exact dictionary entries (e.g. `星光` -> `コシヒカリ`).
+  - Exact alias matches take precedence over fuzzy candidates, even when alias text is shorter.
 - Follow-up prompt on `transcript.noinfo` must focus on missing slots:
   - weight is known -> ask brand only; brand is known -> ask weight only.
   - avoid resetting to a generic "brand and weight" prompt when one slot is already captured.

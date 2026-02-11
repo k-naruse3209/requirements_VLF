@@ -56,6 +56,8 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
 (async () => {
   assert.equal(extractRiceBrand("コシヒカリ")?.brand, "コシヒカリ");
   assert.equal(extractRiceBrand("こしひかり")?.brand, "コシヒカリ");
+  assert.equal(extractRiceBrand("星光です")?.brand, "コシヒカリ");
+  assert.equal(extractRiceBrand("星光です")?.confidence, "exact");
   assert.equal(extractWeightKg("5kg"), 5);
   assert.equal(extractWeightKg("五キロ"), 5);
 
@@ -116,6 +118,12 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
     assert.equal(ctx.riceBrand, undefined);
     assert.equal(ctx.riceWeightKg, 5);
     assert.equal(state, "ST_RequirementCheck");
+  });
+
+  await runCase("case11: 星光 5kg", "星光 5kg", (state, ctx) => {
+    assert.equal(ctx.riceBrand, "コシヒカリ");
+    assert.equal(ctx.riceWeightKg, 5);
+    assert.equal(state, "ST_ProductSuggestion");
   });
 
   console.log("All rice flow tests passed");
