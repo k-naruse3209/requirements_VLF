@@ -34,16 +34,6 @@ const safeJson = (data: string): unknown => {
 
 const logPrefix = (wsId: string) => `[ws:${wsId}]`;
 
-const buildVerbatimInstructions = (verbatimText: string) =>
-  [
-    "次の文章を一字一句そのまま読み上げてください。",
-    "言い換え・補足・前置き・語尾の追加は禁止です。",
-    "文章の内容を変えず、ちょうど同じ文字列で出力してください。",
-    "",
-    "=== 読み上げ文 ===",
-    verbatimText,
-  ].join("\n");
-
 const sanitizeReadAloudText = (text: string) =>
   text
     .replace(/（\s*例\s*[:：][^）]*）/g, "")
@@ -394,7 +384,7 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
-    const responseInstruction = buildVerbatimInstructions(spokenText);
+    const responseInstruction = spokenText;
     const payload = useAudioSchema
       ? {
           type: "response.create",

@@ -103,7 +103,17 @@ export const normalizeRiceText = (text: string) => {
 };
 
 const riceBrandDictionary: Record<string, string[]> = {
-  コシヒカリ: ["こしひかり", "こし光", "こしひkari", "越光", "越ひかり", "腰光", "こしひ", "こし"],
+  コシヒカリ: [
+    "こしひかり",
+    "こし光",
+    "こしひkari",
+    "越光",
+    "越ひかり",
+    "腰光",
+    "星光",
+    "こしひ",
+    "こし",
+  ],
   あきたこまち: ["あきたこまち", "秋田こまち", "あきた小町", "秋田小町", "あきたこま", "あきた"],
   ひとめぼれ: ["ひとめぼれ", "一目ぼれ", "一目惚れ", "ひとめ"],
   ゆめぴりか: ["ゆめぴりか", "夢ぴりか", "ゆめぴ"],
@@ -174,11 +184,15 @@ export const extractRiceBrand = (text: string) => {
     for (const variant of variants) {
       const key = normalizeBrandText(variant);
       if (!key) continue;
-      if (normalized.includes(key) && key.length > bestLength) {
-        best = canonical;
-        bestLength = key.length;
-        bestDistance = 0;
-        confidence = "exact";
+      if (normalized.includes(key)) {
+        // Exact match should always win over an existing fuzzy candidate,
+        // even when the exact alias text is shorter.
+        if (best == null || confidence === "fuzzy" || key.length > bestLength) {
+          best = canonical;
+          bestLength = key.length;
+          bestDistance = 0;
+          confidence = "exact";
+        }
         continue;
       }
       const distance = bestDistanceInText(normalized, key);
