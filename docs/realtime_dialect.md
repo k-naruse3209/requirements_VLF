@@ -103,6 +103,7 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
   - Compare expected prompt text vs `response.audio_transcript.done`; log `assistant.transcript.mismatch` when they diverge.
   - Do not auto-flush `queuedPrompt` on `response.done`; require the next committed user turn before new prompt generation.
   - Do not start conversation or forward inbound media until `session.updated` is received (session config acknowledged).
+  - `createResponse` must also defer send when session is not ready (double guard against early `response.create`).
 
 ## Call Transcript Extraction (offline)
 - ws-gateway logs now emit one-line JSON conversation events:

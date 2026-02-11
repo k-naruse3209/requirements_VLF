@@ -270,6 +270,7 @@ wss.on("connection", (ws: WebSocket) => {
   let pendingCommitCount = 0;
   let commitTimer: NodeJS.Timeout | null = null;
   let queuedPrompt: string | null = null;
+  let queuedPromptReason: "active" | "session_not_ready" | null = null;
   let conversationStarted = false;
   let stopReceived = false;
   let callLogId: string | null = null;
@@ -400,6 +401,7 @@ wss.on("connection", (ws: WebSocket) => {
       // When assistant text drifts from state-machine prompt, stale queued prompts
       // can amplify divergence. Drop them and wait for the next user turn.
       queuedPrompt = null;
+      queuedPromptReason = null;
     }
     console.log(`${logPrefix(wsId)} [CONV] AI`, JSON.stringify({ text, source }));
   };
@@ -420,8 +422,15 @@ wss.on("connection", (ws: WebSocket) => {
         spoken: spokenText,
       });
     }
+    if (!realtimeSessionReady) {
+      queuedPrompt = spokenText;
+      queuedPromptReason = "session_not_ready";
+      console.log(`${logPrefix(wsId)} defer response.create (session not ready)`);
+      return;
+    }
     if (responseActive || responsePending) {
       queuedPrompt = spokenText;
+      queuedPromptReason = "active";
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
@@ -500,6 +509,7 @@ wss.on("connection", (ws: WebSocket) => {
     if (queuedPrompt) {
       console.log(`${logPrefix(wsId)} drop queued prompt on user turn`, queuedPrompt);
       queuedPrompt = null;
+      queuedPromptReason = null;
     }
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
@@ -706,6 +716,12 @@ wss.on("connection", (ws: WebSocket) => {
         realtimeSessionReady = true;
         // Start greeting only after session.update is acknowledged.
         maybeStartConversation();
+        if (queuedPrompt && queuedPromptReason === "session_not_ready" && !responseActive && !responsePending) {
+          const pending = queuedPrompt;
+          queuedPrompt = null;
+          queuedPromptReason = null;
+          createResponse(pending);
+        }
       }
       if (payload.type === "response.output_audio.delta" || payload.type === "response.audio.delta") {
         const delta = payload.delta as string | undefined;
@@ -814,6 +830,7 @@ wss.on("connection", (ws: WebSocket) => {
             responseActive = false;
             responsePending = false;
             queuedPrompt = null;
+            queuedPromptReason = null;
             ignoreCommitUntilSpeechEnd = false;
           } else {
             ignoreCommitUntilSpeechEnd = true;
