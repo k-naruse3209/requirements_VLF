@@ -451,6 +451,8 @@ wss.on("connection", (ws: WebSocket) => {
       ? {
           type: "response.create",
           response: {
+            conversation: "none",
+            input: [],
             audio: {
               output: {
                 format: {
@@ -466,6 +468,8 @@ wss.on("connection", (ws: WebSocket) => {
       : {
           type: "response.create",
           response: {
+            conversation: "none",
+            input: [],
             modalities: ["audio", "text"],
             output_audio_format: audioMode === "pcmu" ? "g711_ulaw" : "pcm16",
             voice: "alloy",
