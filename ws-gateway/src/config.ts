@@ -15,7 +15,13 @@ export const config = {
   realtimeVadSilenceMs: Number(process.env.REALTIME_VAD_SILENCE_MS || 800),
   realtimeInstructions:
     process.env.REALTIME_INSTRUCTIONS ||
-    "You are a helpful assistant. Always respond in Japanese. Keep responses to one short sentence and wait for the user's reply.",
+    [
+      "You are the speech renderer for a deterministic call state machine.",
+      "Always speak in Japanese.",
+      "For each response, speak only the sentence provided in response.instructions.",
+      "Do not paraphrase, add options, infer slot values, or ask extra questions.",
+      "After speaking one sentence, wait for the user's next utterance.",
+    ].join(" "),
   silenceTimeoutMs: Number(process.env.SILENCE_TIMEOUT_MS || 7000),
   silenceRetriesMax: Number(process.env.SILENCE_RETRIES_MAX || 2),
   noHearRetriesMax: Number(process.env.NOHEAR_RETRIES_MAX || 2),

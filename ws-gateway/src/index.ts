@@ -41,6 +41,23 @@ const sanitizeReadAloudText = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const normalizeSpokenForCompare = (text: string) =>
+  text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[、。,.!?！？「」『』（）()]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+
+const isCloseSpokenMatch = (expected: string, actual: string) => {
+  const a = normalizeSpokenForCompare(expected);
+  const b = normalizeSpokenForCompare(actual);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
+};
+
 const extractContentText = (content: unknown): string | null => {
   if (!Array.isArray(content)) return null;
   for (const part of content) {
@@ -238,15 +255,19 @@ wss.on("connection", (ws: WebSocket) => {
   let streamSid = "";
   let mediaCount = 0;
   let realtime: WebSocket | null = null;
-  let realtimeReady = false;
+  let realtimeSocketOpen = false;
+  let realtimeSessionReady = false;
   let hasBufferedAudio = false;
   let responseActive = false;
   let responsePending = false;
+  let activeAssistantTranscript = "";
+  let assistantTranscriptLogged = false;
+  let expectedAssistantTranscript = "";
   let lastOutputItemId = "";
   let sessionCreatedLogged = false;
   let audioFrameCount = 0;
   let bufferedSamples = 0;
-  let commitPending = false;
+  let pendingCommitCount = 0;
   let commitTimer: NodeJS.Timeout | null = null;
   let queuedPrompt: string | null = null;
   let conversationStarted = false;
@@ -262,8 +283,11 @@ wss.on("connection", (ws: WebSocket) => {
   const minCommitSamples = Math.ceil(outputSampleRate / 10);
   const vadEnabled = true;
   let pendingTranscript: { text: string; confidence: number | null; ts: number } | null = null;
+  let speechStartedSinceCommit = false;
+  let ignoreCommitUntilSpeechEnd = false;
   const interruptResponseEnabled =
     config.realtimeInterruptResponse && config.bargeInCancelEnabled;
+  const commitWaitTimeoutMs = 3000;
 
   console.log(`${logPrefix(wsId)} connected`);
   console.log(`${logPrefix(wsId)} audio.pipeline`, {
@@ -363,6 +387,23 @@ wss.on("connection", (ws: WebSocket) => {
     console.log(`${logPrefix(wsId)} realtime send ${label}`, JSON.stringify(payload));
   };
 
+  const flushAssistantTranscript = (source: "response.audio_transcript.done" | "response.done") => {
+    if (assistantTranscriptLogged) return;
+    const text = activeAssistantTranscript.trim();
+    if (!text) return;
+    assistantTranscriptLogged = true;
+    if (expectedAssistantTranscript && !isCloseSpokenMatch(expectedAssistantTranscript, text)) {
+      console.warn(`${logPrefix(wsId)} assistant.transcript.mismatch`, {
+        expected: expectedAssistantTranscript,
+        actual: text,
+      });
+      // When assistant text drifts from state-machine prompt, stale queued prompts
+      // can amplify divergence. Drop them and wait for the next user turn.
+      queuedPrompt = null;
+    }
+    console.log(`${logPrefix(wsId)} [CONV] AI`, JSON.stringify({ text, source }));
+  };
+
   const logClient = createLogClient();
   if (!logClient) {
     console.warn(`${logPrefix(wsId)} log client disabled (LOG_API_BASE_URL not set)`);
@@ -384,6 +425,7 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
+    expectedAssistantTranscript = spokenText;
     const responseInstruction = spokenText;
     const payload = useAudioSchema
       ? {
@@ -424,18 +466,21 @@ wss.on("connection", (ws: WebSocket) => {
   };
 
   const processCommittedTurn = () => {
-    if (!commitPending) return;
+    if (pendingCommitCount <= 0) return;
     if (!pendingTranscript) return;
+    if (responseActive || responsePending) {
+      console.log(`${logPrefix(wsId)} defer transcript (assistant speaking)`, pendingTranscript.text);
+      return;
+    }
     const transcript = pendingTranscript;
     pendingTranscript = null;
-    commitPending = false;
-    if (commitTimer) {
-      clearTimeout(commitTimer);
-      commitTimer = null;
-    }
-    if (responseActive || responsePending) {
-      console.log(`${logPrefix(wsId)} skip transcript (assistant speaking)`, transcript.text);
-      return;
+    pendingCommitCount -= 1;
+    if (pendingCommitCount <= 0) {
+      pendingCommitCount = 0;
+      if (commitTimer) {
+        clearTimeout(commitTimer);
+        commitTimer = null;
+      }
     }
     if (logClient && callLogId) {
       logClient.appendMessage(callLogId, {
@@ -445,21 +490,41 @@ wss.on("connection", (ws: WebSocket) => {
         ended_at: new Date().toISOString(),
       });
     }
+    console.log(
+      `${logPrefix(wsId)} [CONV] USER`,
+      JSON.stringify({
+        text: transcript.text,
+        confidence: transcript.confidence,
+      })
+    );
+    if (queuedPrompt) {
+      console.log(`${logPrefix(wsId)} drop queued prompt on user turn`, queuedPrompt);
+      queuedPrompt = null;
+    }
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
 
   const markCommitted = () => {
-    commitPending = true;
+    if (ignoreCommitUntilSpeechEnd || !speechStartedSinceCommit) {
+      pendingTranscript = null;
+      speechStartedSinceCommit = false;
+      ignoreCommitUntilSpeechEnd = false;
+      console.log(`${logPrefix(wsId)} committed ignored (no user speech turn)`);
+      return;
+    }
+    pendingCommitCount += 1;
+    speechStartedSinceCommit = false;
+    ignoreCommitUntilSpeechEnd = false;
     conversation.onUserCommitted();
     processCommittedTurn();
-    if (!commitTimer) {
-      commitTimer = setTimeout(() => {
-        if (!commitPending) return;
-        commitPending = false;
-        commitTimer = null;
-        console.log(`${logPrefix(wsId)} committed without transcript`);
-      }, 500);
-    }
+    if (commitTimer) clearTimeout(commitTimer);
+    commitTimer = setTimeout(() => {
+      if (pendingCommitCount <= 0) return;
+      console.log(`${logPrefix(wsId)} committed without transcript`, { pendingCommitCount });
+      pendingCommitCount = 0;
+      pendingTranscript = null;
+      commitTimer = null;
+    }, commitWaitTimeoutMs);
   };
 
   const sendToTwilio = (audioBase64: string) => {
@@ -524,7 +589,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   const maybeStartConversation = () => {
     if (conversationStarted) return;
-    if (!realtimeReady || !streamSid) return;
+    if (!realtimeSessionReady || !streamSid) return;
     conversationStarted = true;
     conversation.start();
   };
@@ -532,7 +597,8 @@ wss.on("connection", (ws: WebSocket) => {
   realtime = createRealtimeSocket();
   if (realtime) {
     realtime.on("open", () => {
-      realtimeReady = true;
+      realtimeSocketOpen = true;
+      realtimeSessionReady = false;
       if (!config.realtimeTranscriptionModel) {
         console.error(`${logPrefix(wsId)} missing REALTIME_TRANSCRIPTION_MODEL`);
         realtime.close();
@@ -591,7 +657,6 @@ wss.on("connection", (ws: WebSocket) => {
       logOutgoing("session.update", payload);
       sendToRealtime(payload);
       console.log(`${logPrefix(wsId)} realtime connected`);
-      maybeStartConversation();
     });
 
     realtime.on("message", (data, isBinary) => {
@@ -615,7 +680,20 @@ wss.on("connection", (ws: WebSocket) => {
       }
       const userTranscript = extractUserTranscript(payload);
       if (userTranscript) {
-        pendingTranscript = { ...userTranscript, ts: Date.now() };
+        const now = Date.now();
+        if (
+          pendingTranscript &&
+          pendingTranscript.text === userTranscript.text &&
+          now - pendingTranscript.ts < 1200
+        ) {
+          pendingTranscript = {
+            text: userTranscript.text,
+            confidence: userTranscript.confidence ?? pendingTranscript.confidence,
+            ts: now,
+          };
+        } else {
+          pendingTranscript = { ...userTranscript, ts: now };
+        }
         processCommittedTurn();
       }
       if (payload.type === "session.created" && !sessionCreatedLogged) {
@@ -625,7 +703,8 @@ wss.on("connection", (ws: WebSocket) => {
       }
       if (payload.type === "session.updated") {
         validateSession(payload);
-        // Ensure greeting is sent after session is fully configured.
+        realtimeSessionReady = true;
+        // Start greeting only after session.update is acknowledged.
         maybeStartConversation();
       }
       if (payload.type === "response.output_audio.delta" || payload.type === "response.audio.delta") {
@@ -680,6 +759,25 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} content_part keys`, Object.keys(part || {}));
         console.log(`${logPrefix(wsId)} content_part payload`, JSON.stringify(part || {}));
       }
+      if (payload.type === "response.audio_transcript.delta") {
+        const delta =
+          (payload as { delta?: string; transcript?: string; text?: string }).delta ||
+          (payload as { transcript?: string; text?: string }).transcript ||
+          (payload as { text?: string }).text;
+        if (typeof delta === "string" && delta) {
+          activeAssistantTranscript += delta;
+          console.log(`${logPrefix(wsId)} response.audio_transcript.delta.text`, delta);
+        }
+      }
+      if (payload.type === "response.audio_transcript.done") {
+        const transcript =
+          (payload as { transcript?: string; text?: string }).transcript ||
+          (payload as { text?: string }).text;
+        if (typeof transcript === "string" && transcript.trim()) {
+          activeAssistantTranscript = transcript;
+        }
+        flushAssistantTranscript("response.audio_transcript.done");
+      }
       if (payload.type === "response.output_item.added") {
         const itemId = (payload as { item?: { id?: string } }).item?.id;
         if (itemId) lastOutputItemId = itemId;
@@ -689,19 +787,18 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} realtime event`, payload.type);
       }
       if (payload.type === "response.created") {
+        activeAssistantTranscript = "";
+        assistantTranscriptLogged = false;
         responseActive = true;
         responsePending = false;
         conversation.onAssistantStart();
       }
       if (payload.type === "response.done") {
+        flushAssistantTranscript("response.done");
         responseActive = false;
         responsePending = false;
         conversation.onAssistantDone();
-        if (queuedPrompt) {
-          const pending = queuedPrompt;
-          queuedPrompt = null;
-          createResponse(pending);
-        }
+        processCommittedTurn();
         if (lastOutputItemId) {
           sendToRealtime({
             type: "conversation.item.retrieve",
@@ -710,13 +807,22 @@ wss.on("connection", (ws: WebSocket) => {
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
-        if (interruptResponseEnabled && (responseActive || responsePending)) {
-          logOutgoing("response.cancel", { type: "response.cancel" });
-          sendToRealtime({ type: "response.cancel" });
-          responseActive = false;
-          responsePending = false;
-          queuedPrompt = null;
+        if (responseActive || responsePending) {
+          if (interruptResponseEnabled) {
+            logOutgoing("response.cancel", { type: "response.cancel" });
+            sendToRealtime({ type: "response.cancel" });
+            responseActive = false;
+            responsePending = false;
+            queuedPrompt = null;
+            ignoreCommitUntilSpeechEnd = false;
+          } else {
+            ignoreCommitUntilSpeechEnd = true;
+            console.log(`${logPrefix(wsId)} speech_started while assistant speaking (commit gated)`);
+          }
+        } else {
+          ignoreCommitUntilSpeechEnd = false;
         }
+        speechStartedSinceCommit = true;
         conversation.onSpeechStarted();
       }
       if (payload.type === "input_audio_buffer.speech_stopped") {
@@ -728,7 +834,8 @@ wss.on("connection", (ws: WebSocket) => {
     });
 
     realtime.on("close", (code, reason) => {
-      realtimeReady = false;
+      realtimeSocketOpen = false;
+      realtimeSessionReady = false;
       console.log(`${logPrefix(wsId)} realtime closed`, { code, reason: reason.toString() });
     });
 
@@ -787,7 +894,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (mediaCount === 1 || mediaCount % 50 === 0) {
           console.log(`${logPrefix(wsId)} media chunks`, mediaCount);
         }
-        if (realtimeReady) {
+        if (realtimeSessionReady) {
           if (useAudioSchema) {
             if (audioMode === "pcmu") {
               sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
@@ -825,13 +932,15 @@ wss.on("connection", (ws: WebSocket) => {
             }
           }
           hasBufferedAudio = true;
+        } else if (realtimeSocketOpen && mediaCount === 1) {
+          console.log(`${logPrefix(wsId)} media dropped before session.updated`);
         }
         break;
       case "stop":
         stopReceived = true;
         console.log(`${logPrefix(wsId)} stream stopped`);
         hasBufferedAudio = false;
-        if (!vadEnabled && realtimeReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
+        if (!vadEnabled && realtimeSessionReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
           sendToRealtime({ type: "input_audio_buffer.commit" });
           audioFrameCount = 0;
           bufferedSamples = 0;
