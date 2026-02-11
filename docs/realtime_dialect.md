@@ -77,6 +77,13 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
   - Response instructions are wrapped in a strict verbatim template.
   - Example markers such as `（例: コシヒカリ）` / `(例: 5kg)` are stripped before read-aloud.
 
+### Additional Stability Guardrails (2026-02-11)
+- Barge-in cancel must be gated by `interruptResponseEnabled`.
+  - `input_audio_buffer.speech_started` should not trigger `response.cancel` when interrupt is effectively off.
+- ASR noise hardening for brand extraction:
+  - Non-Japanese transcripts are ignored before state updates.
+  - Fuzzy brand candidates are logged (`brand.fuzzy.ignored`) and not applied to context/state transitions.
+
 ## Known Pitfalls
 - `session.audio` can be rejected by some models with `Unknown parameter`.
 - Audio event names vary; accept both `response.output_audio.delta` and `response.audio.delta`.

@@ -720,7 +720,7 @@ wss.on("connection", (ws: WebSocket) => {
         }
       }
       if (payload.type === "input_audio_buffer.speech_started") {
-        if (responseActive || responsePending) {
+        if (interruptResponseEnabled && (responseActive || responsePending)) {
           logOutgoing("response.cancel", { type: "response.cancel" });
           sendToRealtime({ type: "response.cancel" });
           responseActive = false;
