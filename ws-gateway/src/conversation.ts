@@ -569,7 +569,13 @@ export const createConversationController = ({
       if (state === "ST_Greeting" || state === "ST_RequirementCheck") {
         if (context.noHearRetries === 0) {
           context.noHearRetries += 1;
-          onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+          if (!context.riceBrand && context.riceWeightKg) {
+            onPrompt(`量は${context.riceWeightKg}kgですね。銘柄は何をご希望ですか？`);
+          } else if (context.riceBrand && !context.riceWeightKg) {
+            onPrompt(`銘柄は「${context.riceBrand}」で承りました。量は何kgがご希望ですか？`);
+          } else {
+            onPrompt("銘柄（例: コシヒカリ）と量（例: 5kg）を教えてください。");
+          }
           startSilenceTimer();
         } else {
           onLog("transcript.noinfo", { text: normalized });
