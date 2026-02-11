@@ -41,6 +41,23 @@ const sanitizeReadAloudText = (text: string) =>
     .replace(/\s{2,}/g, " ")
     .trim();
 
+const normalizeSpokenForCompare = (text: string) =>
+  text
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/[、。,.!?！？「」『』（）()]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
+
+const isCloseSpokenMatch = (expected: string, actual: string) => {
+  const a = normalizeSpokenForCompare(expected);
+  const b = normalizeSpokenForCompare(actual);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  if (a.includes(b) || b.includes(a)) return true;
+  return false;
+};
+
 const extractContentText = (content: unknown): string | null => {
   if (!Array.isArray(content)) return null;
   for (const part of content) {
@@ -244,6 +261,7 @@ wss.on("connection", (ws: WebSocket) => {
   let responsePending = false;
   let activeAssistantTranscript = "";
   let assistantTranscriptLogged = false;
+  let expectedAssistantTranscript = "";
   let lastOutputItemId = "";
   let sessionCreatedLogged = false;
   let audioFrameCount = 0;
@@ -373,6 +391,15 @@ wss.on("connection", (ws: WebSocket) => {
     const text = activeAssistantTranscript.trim();
     if (!text) return;
     assistantTranscriptLogged = true;
+    if (expectedAssistantTranscript && !isCloseSpokenMatch(expectedAssistantTranscript, text)) {
+      console.warn(`${logPrefix(wsId)} assistant.transcript.mismatch`, {
+        expected: expectedAssistantTranscript,
+        actual: text,
+      });
+      // When assistant text drifts from state-machine prompt, stale queued prompts
+      // can amplify divergence. Drop them and wait for the next user turn.
+      queuedPrompt = null;
+    }
     console.log(`${logPrefix(wsId)} [CONV] AI`, JSON.stringify({ text, source }));
   };
 
@@ -397,6 +424,7 @@ wss.on("connection", (ws: WebSocket) => {
       console.log(`${logPrefix(wsId)} skip response.create (active/pending)`);
       return;
     }
+    expectedAssistantTranscript = spokenText;
     const responseInstruction = spokenText;
     const payload = useAudioSchema
       ? {
@@ -468,6 +496,10 @@ wss.on("connection", (ws: WebSocket) => {
         confidence: transcript.confidence,
       })
     );
+    if (queuedPrompt) {
+      console.log(`${logPrefix(wsId)} drop queued prompt on user turn`, queuedPrompt);
+      queuedPrompt = null;
+    }
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
 
@@ -765,11 +797,6 @@ wss.on("connection", (ws: WebSocket) => {
         responsePending = false;
         conversation.onAssistantDone();
         processCommittedTurn();
-        if (queuedPrompt) {
-          const pending = queuedPrompt;
-          queuedPrompt = null;
-          createResponse(pending);
-        }
         if (lastOutputItemId) {
           sendToRealtime({
             type: "conversation.item.retrieve",

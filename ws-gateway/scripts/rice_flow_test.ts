@@ -76,13 +76,13 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
   await runCase("case1: コシヒカリ 5kg", "コシヒカリ 5kg", (state, ctx) => {
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
+    assert.equal(state, "ST_RequirementConfirm");
   });
 
   await runCase("case2: こしひかりを五キロ", "こしひかりを五キロ", (state, ctx) => {
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
+    assert.equal(state, "ST_RequirementConfirm");
   });
 
   await runCase("case3: はい", "はい", (state, ctx) => {
@@ -94,7 +94,7 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
   await runCase("case4: えっと…コシ… 5", "えっと…コシ… 5キロ", (state, ctx) => {
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
+    assert.equal(state, "ST_RequirementConfirm");
   });
 
   await runCase("case5: 10トン", "10トン", (state, ctx) => {
@@ -105,7 +105,7 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
   await runCase("case6: あきたこまち 10キロ", "あきたこまち 10キロ", (state, ctx) => {
     assert.equal(ctx.riceBrand, "あきたこまち");
     assert.equal(ctx.riceWeightKg, 10);
-    assert.equal(state, "ST_ProductSuggestion");
+    assert.equal(state, "ST_RequirementConfirm");
   });
 
   await runCase("case7: ゆめぴりか 0.5kg", "ゆめぴりか 0.5kg", (state, ctx) => {
@@ -135,7 +135,7 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
   await runCase("case11: 星光 5kg", "星光 5kg", (state, ctx) => {
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
-    assert.equal(state, "ST_ProductSuggestion");
+    assert.equal(state, "ST_RequirementConfirm");
   });
 
   {
@@ -146,11 +146,14 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
     assert.equal(controller.getState(), "ST_RequirementCheck");
     await controller.onUserTranscript("5kg", 0.9);
     await flushTicks();
+    assert.equal(controller.getState(), "ST_RequirementConfirm");
+    await controller.onUserTranscript("はい", 0.9);
+    await flushTicks();
     const ctx = controller.getContext();
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
     assert.equal(controller.getState(), "ST_ProductSuggestion");
-    console.log("ok case12: split slots brand->weight advances");
+    console.log("ok case12: split slots brand->weight advances via confirm");
   }
 
   {
@@ -161,17 +164,41 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
     assert.equal(controller.getState(), "ST_RequirementCheck");
     await controller.onUserTranscript("あきたこまち", 0.9);
     await flushTicks();
+    assert.equal(controller.getState(), "ST_RequirementConfirm");
+    await controller.onUserTranscript("はい", 0.9);
+    await flushTicks();
     const ctx = controller.getContext();
     assert.equal(ctx.riceBrand, "あきたこまち");
     assert.equal(ctx.riceWeightKg, 5);
     assert.equal(controller.getState(), "ST_ProductSuggestion");
-    console.log("ok case13: split slots weight->brand advances");
+    console.log("ok case13: split slots weight->brand advances via confirm");
+  }
+
+  {
+    const { controller } = makeController();
+    await controller.start();
+    await controller.onUserTranscript("星光二十キロ", 0.9);
+    await flushTicks();
+    let ctx = controller.getContext();
+    assert.equal(ctx.riceBrand, "コシヒカリ");
+    assert.equal(ctx.riceWeightKg, 20);
+    assert.equal(controller.getState(), "ST_RequirementConfirm");
+    await controller.onUserTranscript("いいえ", 0.9);
+    await flushTicks();
+    ctx = controller.getContext();
+    assert.equal(ctx.riceBrand, undefined);
+    assert.equal(ctx.riceWeightKg, undefined);
+    assert.equal(controller.getState(), "ST_RequirementCheck");
+    console.log("ok case14: requirement confirm no clears both slots");
   }
 
   {
     const { controller } = makeController();
     await controller.start();
     await controller.onUserTranscript("コシヒカリ 5kg", 0.9);
+    await flushTicks();
+    assert.equal(controller.getState(), "ST_RequirementConfirm");
+    await controller.onUserTranscript("はい", 0.9);
     await flushTicks();
     assert.equal(controller.getState(), "ST_ProductSuggestion");
     await controller.onUserTranscript("はい", 0.9);
@@ -186,7 +213,7 @@ const runCase = async (label: string, text: string, assertFn: (state: string, ct
     assert.equal(ctx.riceBrand, "コシヒカリ");
     assert.equal(ctx.riceWeightKg, 5);
     assert.equal(ctx.address, "東京都渋谷区1-2-3 10kg");
-    console.log("ok case14: non-requirement turns do not overwrite slots");
+    console.log("ok case15: non-requirement turns do not overwrite slots");
   }
 
   console.log("All rice flow tests passed");

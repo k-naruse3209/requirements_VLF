@@ -92,10 +92,16 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
   - Ignore `input_audio_buffer.committed` when no `input_audio_buffer.speech_started` was observed for that turn.
   - Keep a short wait window for late transcription events so a valid committed turn is not dropped by event ordering.
 - Requirement-slot update scope:
-  - Brand/weight extraction and context updates are allowed only in `ST_Greeting` and `ST_RequirementCheck`.
+  - Brand/weight extraction and context updates are allowed only in `ST_Greeting`, `ST_RequirementCheck`, and `ST_RequirementConfirm`.
   - Non-requirement states (product suggestion, price, address, delivery, order confirmation) must not overwrite captured brand/weight slots.
+- Requirement confirmation gate:
+  - After both slots are captured, transition to `ST_RequirementConfirm`.
+  - Advance to downstream states only after explicit `はい`; `いいえ` clears slots and returns to `ST_RequirementCheck`.
 - Closing reason hardening:
   - Default `closingReason` must be `error`; transition to `ST_Closing` with `success`/`cancel` only at explicit success or user-cancel points.
+- Assistant output drift guard:
+  - Compare expected prompt text vs `response.audio_transcript.done`; log `assistant.transcript.mismatch` when they diverge.
+  - Do not auto-flush `queuedPrompt` on `response.done`; require the next committed user turn before new prompt generation.
 
 ## Call Transcript Extraction (offline)
 - ws-gateway logs now emit one-line JSON conversation events:
