@@ -242,6 +242,8 @@ wss.on("connection", (ws: WebSocket) => {
   let hasBufferedAudio = false;
   let responseActive = false;
   let responsePending = false;
+  let activeAssistantTranscript = "";
+  let assistantTranscriptLogged = false;
   let lastOutputItemId = "";
   let sessionCreatedLogged = false;
   let audioFrameCount = 0;
@@ -366,6 +368,14 @@ wss.on("connection", (ws: WebSocket) => {
     console.log(`${logPrefix(wsId)} realtime send ${label}`, JSON.stringify(payload));
   };
 
+  const flushAssistantTranscript = (source: "response.audio_transcript.done" | "response.done") => {
+    if (assistantTranscriptLogged) return;
+    const text = activeAssistantTranscript.trim();
+    if (!text) return;
+    assistantTranscriptLogged = true;
+    console.log(`${logPrefix(wsId)} [CONV] AI`, JSON.stringify({ text, source }));
+  };
+
   const logClient = createLogClient();
   if (!logClient) {
     console.warn(`${logPrefix(wsId)} log client disabled (LOG_API_BASE_URL not set)`);
@@ -451,6 +461,13 @@ wss.on("connection", (ws: WebSocket) => {
         ended_at: new Date().toISOString(),
       });
     }
+    console.log(
+      `${logPrefix(wsId)} [CONV] USER`,
+      JSON.stringify({
+        text: transcript.text,
+        confidence: transcript.confidence,
+      })
+    );
     conversation.onUserTranscript(transcript.text, transcript.confidence);
   };
 
@@ -708,6 +725,25 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} content_part keys`, Object.keys(part || {}));
         console.log(`${logPrefix(wsId)} content_part payload`, JSON.stringify(part || {}));
       }
+      if (payload.type === "response.audio_transcript.delta") {
+        const delta =
+          (payload as { delta?: string; transcript?: string; text?: string }).delta ||
+          (payload as { transcript?: string; text?: string }).transcript ||
+          (payload as { text?: string }).text;
+        if (typeof delta === "string" && delta) {
+          activeAssistantTranscript += delta;
+          console.log(`${logPrefix(wsId)} response.audio_transcript.delta.text`, delta);
+        }
+      }
+      if (payload.type === "response.audio_transcript.done") {
+        const transcript =
+          (payload as { transcript?: string; text?: string }).transcript ||
+          (payload as { text?: string }).text;
+        if (typeof transcript === "string" && transcript.trim()) {
+          activeAssistantTranscript = transcript;
+        }
+        flushAssistantTranscript("response.audio_transcript.done");
+      }
       if (payload.type === "response.output_item.added") {
         const itemId = (payload as { item?: { id?: string } }).item?.id;
         if (itemId) lastOutputItemId = itemId;
@@ -717,11 +753,14 @@ wss.on("connection", (ws: WebSocket) => {
         console.log(`${logPrefix(wsId)} realtime event`, payload.type);
       }
       if (payload.type === "response.created") {
+        activeAssistantTranscript = "";
+        assistantTranscriptLogged = false;
         responseActive = true;
         responsePending = false;
         conversation.onAssistantStart();
       }
       if (payload.type === "response.done") {
+        flushAssistantTranscript("response.done");
         responseActive = false;
         responsePending = false;
         conversation.onAssistantDone();

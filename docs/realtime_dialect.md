@@ -97,6 +97,24 @@ OPENAI_API_KEY=... REALTIME_MODEL=... REALTIME_BETA_HEADER=1 REALTIME_SCHEMA=fla
 - Closing reason hardening:
   - Default `closingReason` must be `error`; transition to `ST_Closing` with `success`/`cancel` only at explicit success or user-cancel points.
 
+## Call Transcript Extraction (offline)
+- ws-gateway logs now emit one-line JSON conversation events:
+  - `[CONV] USER {"text":"...","confidence":...}`
+  - `[CONV] AI {"text":"...","source":"response.audio_transcript.done|response.done"}`
+- Extract the latest call conversation:
+
+```bash
+cd ws-gateway
+LOG_DIR="$(cat /tmp/vlf_phase0_log_dir)" npm run conv:last
+```
+
+- Extract all conversation lines in the log:
+
+```bash
+cd ws-gateway
+LOG_DIR="$(cat /tmp/vlf_phase0_log_dir)" npm run conv:all
+```
+
 ## Known Pitfalls
 - `session.audio` can be rejected by some models with `Unknown parameter`.
 - Audio event names vary; accept both `response.output_audio.delta` and `response.audio.delta`.
