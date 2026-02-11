@@ -255,7 +255,8 @@ wss.on("connection", (ws: WebSocket) => {
   let streamSid = "";
   let mediaCount = 0;
   let realtime: WebSocket | null = null;
-  let realtimeReady = false;
+  let realtimeSocketOpen = false;
+  let realtimeSessionReady = false;
   let hasBufferedAudio = false;
   let responseActive = false;
   let responsePending = false;
@@ -588,7 +589,7 @@ wss.on("connection", (ws: WebSocket) => {
 
   const maybeStartConversation = () => {
     if (conversationStarted) return;
-    if (!realtimeReady || !streamSid) return;
+    if (!realtimeSessionReady || !streamSid) return;
     conversationStarted = true;
     conversation.start();
   };
@@ -596,7 +597,8 @@ wss.on("connection", (ws: WebSocket) => {
   realtime = createRealtimeSocket();
   if (realtime) {
     realtime.on("open", () => {
-      realtimeReady = true;
+      realtimeSocketOpen = true;
+      realtimeSessionReady = false;
       if (!config.realtimeTranscriptionModel) {
         console.error(`${logPrefix(wsId)} missing REALTIME_TRANSCRIPTION_MODEL`);
         realtime.close();
@@ -655,7 +657,6 @@ wss.on("connection", (ws: WebSocket) => {
       logOutgoing("session.update", payload);
       sendToRealtime(payload);
       console.log(`${logPrefix(wsId)} realtime connected`);
-      maybeStartConversation();
     });
 
     realtime.on("message", (data, isBinary) => {
@@ -702,7 +703,8 @@ wss.on("connection", (ws: WebSocket) => {
       }
       if (payload.type === "session.updated") {
         validateSession(payload);
-        // Ensure greeting is sent after session is fully configured.
+        realtimeSessionReady = true;
+        // Start greeting only after session.update is acknowledged.
         maybeStartConversation();
       }
       if (payload.type === "response.output_audio.delta" || payload.type === "response.audio.delta") {
@@ -832,7 +834,8 @@ wss.on("connection", (ws: WebSocket) => {
     });
 
     realtime.on("close", (code, reason) => {
-      realtimeReady = false;
+      realtimeSocketOpen = false;
+      realtimeSessionReady = false;
       console.log(`${logPrefix(wsId)} realtime closed`, { code, reason: reason.toString() });
     });
 
@@ -891,7 +894,7 @@ wss.on("connection", (ws: WebSocket) => {
         if (mediaCount === 1 || mediaCount % 50 === 0) {
           console.log(`${logPrefix(wsId)} media chunks`, mediaCount);
         }
-        if (realtimeReady) {
+        if (realtimeSessionReady) {
           if (useAudioSchema) {
             if (audioMode === "pcmu") {
               sendToRealtime({ type: "input_audio_buffer.append", audio: event.media.payload });
@@ -929,13 +932,15 @@ wss.on("connection", (ws: WebSocket) => {
             }
           }
           hasBufferedAudio = true;
+        } else if (realtimeSocketOpen && mediaCount === 1) {
+          console.log(`${logPrefix(wsId)} media dropped before session.updated`);
         }
         break;
       case "stop":
         stopReceived = true;
         console.log(`${logPrefix(wsId)} stream stopped`);
         hasBufferedAudio = false;
-        if (!vadEnabled && realtimeReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
+        if (!vadEnabled && realtimeSessionReady && useAudioSchema && bufferedSamples >= minCommitSamples) {
           sendToRealtime({ type: "input_audio_buffer.commit" });
           audioFrameCount = 0;
           bufferedSamples = 0;
