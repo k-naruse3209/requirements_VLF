@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "realtime-stub": "tsx scripts/local_realtime_stub.ts",
+    "tools-stub": "tsx scripts/local_tools_stub.ts",
     "twilio-probe": "tsx scripts/twilio_e2e_probe.ts",
     "smoke": "tsx scripts/realtime_smoke_test.ts",
     "rice-test": "tsx scripts/rice_flow_test.ts",
