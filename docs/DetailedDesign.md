@@ -23,6 +23,7 @@ SSOT: docs/DetailedDesign.md
 - Node.js（TypeScript）
 - OpenAI Realtime APIと双方向ストリーム接続
 - コーデック変換はMVPでは行わない（PCMUで完結）
+- 状態機械本体は `ws-gateway/src/stateMachine.ts`、互換エントリは `ws-gateway/src/conversation.ts`（re-export）
 
 ### ツール連携
 - getStock: 在庫確認

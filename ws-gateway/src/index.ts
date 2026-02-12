@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import { WebSocketServer, WebSocket } from "ws";
 import { config } from "./config.js";
-import { createConversationController, type Product } from "./conversation.js";
+import { createConversationController, type Product } from "./stateMachine.js";
 import { createToolClient } from "./tools.js";
 
 type TwilioEvent =
