@@ -3,6 +3,12 @@
 ## Status
 Accepted
 
+## Superseded by
+- ADR-0009 により、以下の記述は一部上書きされた:
+  - Decision: 「コーデック変換（ffmpeg等）はMVPでは導入せず、PCM24kが必要な段階で追加する」
+  - Consequences: 「音声フォーマットはPCMUで統一し、変換レイヤーを持たない」
+- それ以外の決定（Twilio Media Streams採用、WSゲートウェイをNode.js/TypeScriptで実装）は有効。
+
 ## Context
 音声販売AIはOpenAI Realtime APIを利用するため、テレフォニーとWS中継の設計がMVP成否に直結する。最短で動かすことを優先し、既存運用スタックとの親和性も確保したい。
 

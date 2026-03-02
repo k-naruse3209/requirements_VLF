@@ -22,13 +22,14 @@ SSOT: docs/DetailedDesign.md
 ### WSゲートウェイ
 - Node.js（TypeScript）
 - OpenAI Realtime APIと双方向ストリーム接続
-- コーデック変換はMVPでは行わない（PCMUで完結）
+- Twilioへ返す直前の音声フォーマットを `audio/x-mulaw (PCMU) / 8000Hz` に保証
+- Realtime出力がPCM16の場合はゲートウェイ内でPCMU/8kへ変換して送出
 
 ### ツール連携
 - getStock: 在庫確認
 - getPrice: 価格取得
 - getDeliveryDate: 配送日取得
-- saveOrder: 注文保存
+- saveOrder: 注文保存（`address` 必須、未確定時は保存処理へ進まない）
 
 ### 管理API（/api/v1）
 - 認証: login/logout/refresh
@@ -76,6 +77,7 @@ SSOT: docs/DetailedDesign.md
 - productId
 - price
 - deliveryDate
+- address
 - customerPhone
 - timestamp
 
@@ -174,10 +176,18 @@ ConversationSpec の状態一覧と遷移表に準拠する。
 - address の取得順序:
   1. CallLog.phone_number に紐づく Contact.address を参照
   2. Contact.address が空の場合は通話中に住所を聞き取り、確認後に使用
+- ST_OrderConfirmation で saveOrder 実行前に `addressConfirmed=true` を必須検証する
+
+## バージイン（割り込み）制御
+- トリガーは `input_audio_buffer.speech_started`
+- 停止処理は Twilio `clear` + `response.cancel` + ローカル送信キュー破棄で一本化
+- 二重キャンセルを避けるため、`response.cancel` は冪等ガード付きで送信する
+- CallSid単位で `speech_started` / `response.cancelled` / `response.done` / `twilio clear` を記録する
 
 ## エラーハンドリング
 ### 音声販売AI
-- EX_Silence / EX_NoHear / EX_Correction の挙動は ConversationSpec に従う
+- EX_Silence / EX_NoHear は ConversationSpec に従う
+- Correctionは専用状態に遷移せず、内部例外処理でコンテキストをリセットして `ST_RequirementCheck` に戻す
 - ツールタイムアウトは各ツールの制約に従い、失敗時は ST_Closing に遷移
 
 ### 管理API/画面
@@ -202,6 +212,12 @@ ConversationSpec の状態一覧と遷移表に準拠する。
 - オーケストレータ/API: DB書き込みの唯一の責務
 - 管理画面: 読み取り中心（作成はnotes/tagsのみ）
 
+## 起動エントリ（SSOT）
+- `api`: `src/server.js`
+- `voip-client`: `src/server.ts`
+- `proxy`: `src/index.js`
+- `ws-gateway`: `src/index.ts`
+
 ### SQLiteリポジトリ層（実装方針）
 - 単一DBファイル（例: data/app.db）を起点に接続を共有
 - 書き込みはリポジトリ経由で実行し、APIはリポジトリのみを利用
@@ -220,4 +236,5 @@ ConversationSpec の状態一覧と遷移表に準拠する。
 - 認証必須の管理画面
 - 通話ログと会話メッセージの永続化
 - 管理画面は最新通話を一定間隔で更新
-- 音声はPCMU（μ-law 8kHz）でOpenAI Realtimeと接続する
+- Twilio送信音声は常にPCMU（μ-law 8kHz）を満たす
+- Realtime接続は `REALTIME_AUDIO_MODE` によりPCMU/PCM16を選択できるが、Twilio向け出力保証を優先する

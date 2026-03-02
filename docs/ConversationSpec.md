@@ -32,9 +32,14 @@ stateDiagram-v2
     ST_AddressConfirm --> EX_NoHear: 聞き取り失敗
     ST_OrderConfirmation --> EX_NoHear: 聞き取り失敗
 
-    ST_ProductSuggestion --> EX_Correction: 言い直し要求
-    ST_AddressConfirm --> EX_Correction: 言い直し要求
-    ST_OrderConfirmation --> EX_Correction: 言い直し要求
+    %% 言い直しキーワード検知: 対象状態から ST_RequirementCheck へ遷移
+    ST_Greeting --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_ProductSuggestion --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_StockCheck --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_PriceQuote --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_AddressConfirm --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_DeliveryCheck --> ST_RequirementCheck: 言い直しキーワード（内部補正）
+    ST_OrderConfirmation --> ST_RequirementCheck: 言い直しキーワード（内部補正）
 
     EX_Silence --> ST_Closing: リトライ上限
     EX_Silence --> ST_Greeting: リトライ継続
@@ -51,9 +56,6 @@ stateDiagram-v2
     EX_NoHear --> ST_AddressConfirm: 再確認
     EX_NoHear --> ST_OrderConfirmation: 再確認
 
-    EX_Correction --> ST_RequirementCheck: 要件から再開
-    EX_Correction --> ST_ProductSuggestion: 提案から再開
-    EX_Correction --> ST_AddressConfirm: 住所確認から再開
 ```
 
 ---
@@ -71,7 +73,7 @@ stateDiagram-v2
 
 **ユーザー応答例**:
 - 「はい」「もしもし」
-- 「ノートパソコンが欲しいんですが」
+- 「コシヒカリを5kgお願いします」
 
 **確認方法**: 暗黙（応答音声を検知したら次へ遷移）
 
@@ -89,13 +91,13 @@ stateDiagram-v2
 「どのような商品をお探しでしょうか？」
 
 （ユーザー回答後）
-「ノートパソコンをお探しですね。確認させていただきます。」
+「コシヒカリをご希望ですね。確認させていただきます。」
 ```
 
 **ユーザー応答例**:
-- 「ノートパソコンが欲しい」
-- 「家電を見たい」
-- 「スマートフォン」
+- 「コシヒカリ」
+- 「あきたこまち」
+- 「ゆめぴりかを10kg」
 
 **確認方法**: 明示（「〇〇をお探しですね？」と復唱確認）
 
@@ -112,8 +114,8 @@ stateDiagram-v2
 
 **システムプロンプト例**:
 ```
-「ノートパソコンでしたら、こちらの商品はいかがでしょうか？
-〇〇社の△△△モデル、CPUはインテルCore i5、メモリ8GB、ストレージSSD256GBです。
+「コシヒカリでしたら、こちらの商品はいかがでしょうか？
+新潟産コシヒカリ5kg、精米済みの商品です。
 こちらの商品でよろしいでしょうか？」
 ```
 
@@ -127,7 +129,7 @@ stateDiagram-v2
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗）
 - EX_Silence（無音）
-- EX_Correction（「やっぱり別の商品で」→ ST_RequirementCheck）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 
 **次状態**: ST_StockCheck
 
@@ -155,9 +157,9 @@ stateDiagram-v2
 
 **入力例**:
 - （システム内部）productId を渡す
-- ツール応答例：`{"price": 89800, "currency": "JPY"}`
+- ツール応答例：`{"price": 3280, "currency": "JPY"}`
 
-**確認方法**: 明示（「価格は89,800円です。よろしいですか？」）
+**確認方法**: 明示（「価格は3,280円です。よろしいですか？」）
 
 **失敗時の戻り先**:
 - EX_Silence（無音）
@@ -179,7 +181,7 @@ stateDiagram-v2
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗）
 - EX_Silence（無音）
-- EX_Correction（「違う住所で」→ ST_AddressConfirm）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 
 **次状態**: ST_DeliveryCheck
 
@@ -209,7 +211,7 @@ stateDiagram-v2
 **システムプロンプト例**:
 ```
 「それでは、ご注文内容を確認させていただきます。
-商品は〇〇社△△△モデルのノートパソコン、価格は89,800円、
+商品はコシヒカリ5kg、価格は3,280円、
 配送は1月5日の予定です。
 こちらの内容で注文を確定してよろしいでしょうか？」
 
@@ -227,7 +229,7 @@ stateDiagram-v2
 
 **失敗時の戻り先**:
 - EX_NoHear（聞き取り失敗 → 再度確認）
-- EX_Correction（「やっぱり別の商品」→ ST_RequirementCheck）
+- 言い直しキーワード（内部補正）→ ST_RequirementCheck
 - EX_Silence（無音）
 
 **次状態**: ST_Closing
@@ -282,6 +284,7 @@ stateDiagram-v2
 | ST_OrderConfirmation | 「いいえ」 | ST_Closing | 注文キャンセル |
 | 任意の状態 | 無音検知 | EX_Silence | - |
 | ユーザー入力が必要な状態 | 聞き取り失敗 | EX_NoHear | ST_Greeting/RequirementCheck/ProductSuggestion/AddressConfirm/OrderConfirmation |
+| ST_Greeting/ProductSuggestion/StockCheck/PriceQuote/AddressConfirm/DeliveryCheck/OrderConfirmation | 言い直しキーワード検知 | ST_RequirementCheck | 内部補正処理（専用状態は持たない） |
 
 ---
 
@@ -308,17 +311,17 @@ stateDiagram-v2
 
 **リトライ動作**:
 1. 「申し訳ございません、もう一度おっしゃっていただけますか？」
-2. リトライ回数: **2回**（MVP default）
+2. リトライ回数: **2回**（MVP default, `noHearRetriesMax=2`）
 
 **終了条件**:
-- 2回失敗 → ST_Closing（通話終了）
+- 3回目失敗（初回失敗 + リトライ2回）→ ST_Closing（通話終了）
 - 聞き取り成功 → 元の状態に復帰
 
 **OpenQuestion**: OQ-004参照（信頼度閾値0.55は確定）、OQ-005参照（リトライ2回は確定）
 
 ---
 
-### EX_Correction（言い直し）
+### Correction（言い直し・内部例外処理）
 **トリガー条件**: ユーザーが以下のキーワードを発話（MVP default: 5パターン）
 1. 「やっぱり」
 2. 「違う」
@@ -327,8 +330,15 @@ stateDiagram-v2
 5. 「キャンセル」
 
 **動作**:
-- ST_RequirementCheck に戻り、要件確認からやり直し
-- 既に選択済みの商品IDはクリア
+- 専用状態（`EX_Correction`）には遷移しない
+- 補正トリガ検知時に内部でリセットを実行し、`ST_RequirementCheck` に戻る
+- リセット対象（実装 `resetAllForCorrection()` 相当）:
+  - 商品・注文情報: `product`, `price`, `currency`, `deliveryDate`, `customerPhone`, `orderId`
+  - 住所系: `address`, `addressConfirmed`, `awaitingAddressConfirm`
+  - 要件系: `category`, `awaitingCategoryConfirm`, `suggestedProductIds`
+  - 米要件系: `riceBrand`, `riceWeightKg`, `riceMilling`, `riceNote`
+  - フラグ系: `awaitingBrandConfirm`, `awaitingWeightChoice`, `awaitingMillingChoice`, `brandConfirmed`, `awaitingDeliveryCancelConfirm`
+  - リトライ系: `deliveryRetries`, `orderRetries`
 
 **OpenQuestion**: OQ-007参照（キーワードリスト5つの妥当性） → ADR-004で解決済み
 
@@ -433,6 +443,7 @@ stateDiagram-v2
   "productId": "ABC123",
   "price": 89800,
   "deliveryDate": "2025-01-05",
+  "address": "東京都渋谷区...",
   "customerPhone": "+81-90-1234-5678",
   "timestamp": "2025-12-31T10:30:00Z"
 }

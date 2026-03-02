@@ -7,6 +7,13 @@ SSOT: docs/ImplementationPlan.md
 - docs/PRD.md
 - docs/DetailedDesign.md
 
+## 決定事項（実装SSOT）
+- saveOrderは `address` 必須。住所未確定では保存を実行しない。
+- Correctionは専用状態を持たず、内部例外処理（リセット）として `ST_RequirementCheck` に戻す。
+- バージインは `input_audio_buffer.speech_started` を単一トリガーに統一し、`response.cancel` と Twilio `clear` を冪等処理する。
+- Twilio送信直前の音声は常に `audio/x-mulaw (PCMU) / 8000Hz` を満たす。
+- 起動エントリのSSOTは `api/src/server.js`、`voip-client/src/server.ts`、`proxy/src/index.js`、`ws-gateway/src/index.ts`。
+
 ## 進行順序（依存関係）
 ### Phase 0: 準備
 - 既存API/管理画面の動作確認
