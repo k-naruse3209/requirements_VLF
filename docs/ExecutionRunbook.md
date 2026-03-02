@@ -13,6 +13,7 @@
    - `REALTIME_TRANSPORT=openai_sdk`
    - `REALTIME_TRANSCRIPTION_MODEL`
    - `TOOL_BASE_URL`
+   - `PRODUCT_CATALOG_PATH=./data/rice-catalog.sample.json`
 
 ## Step 2: Start local stubs (recommended first)
 In `ws-gateway`:

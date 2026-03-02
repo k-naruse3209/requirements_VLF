@@ -3,10 +3,12 @@ const btnInit = document.getElementById("btn-init");
 const btnCall = document.getElementById("btn-call");
 const btnHangup = document.getElementById("btn-hangup");
 const callSidEl = document.getElementById("call-sid");
+const remoteAudioBox = document.getElementById("remote-audio");
 
 let device;
 let activeCall;
 let manualHangup = false;
+let activeRemoteAudio;
 
 const log = (message) => {
   logEl.textContent += `${message}\n`;
@@ -66,6 +68,51 @@ const postClientEvent = async (callSid, event) => {
   }
 };
 
+const playRemoteAudioWithRetry = (audioEl, attempt = 1) => {
+  if (!audioEl || typeof audioEl.play !== "function") return;
+  const playPromise = audioEl.play();
+  if (!playPromise || typeof playPromise.catch !== "function") return;
+  playPromise.catch((err) => {
+    if (attempt < 6) {
+      setTimeout(() => playRemoteAudioWithRetry(audioEl, attempt + 1), 120 * attempt);
+      return;
+    }
+    log(`Remote audio play failed: ${err.message}`);
+  });
+};
+
+const mountRemoteAudioElement = (audioEl) => {
+  if (!audioEl) return;
+  const sid = getCallSid(activeCall) || "unknown";
+  const isNewElement = activeRemoteAudio !== audioEl;
+  activeRemoteAudio = audioEl;
+  audioEl.autoplay = true;
+  audioEl.muted = false;
+  audioEl.volume = 1;
+  audioEl.controls = true;
+  audioEl.playsInline = true;
+  if (remoteAudioBox && (isNewElement || !remoteAudioBox.contains(audioEl))) {
+    remoteAudioBox.innerHTML = "";
+    remoteAudioBox.appendChild(audioEl);
+  }
+  if (!audioEl.__vlfEventsBound) {
+    audioEl.__vlfEventsBound = true;
+    audioEl.addEventListener("playing", () => {
+      logEvent("call.audio.playing", { callSid: sid });
+    });
+    audioEl.addEventListener("pause", () => {
+      logEvent("call.audio.pause", { callSid: sid });
+    });
+    audioEl.addEventListener("ended", () => {
+      logEvent("call.audio.ended", { callSid: sid });
+    });
+    audioEl.addEventListener("canplay", () => {
+      playRemoteAudioWithRetry(audioEl);
+    });
+  }
+  playRemoteAudioWithRetry(audioEl);
+};
+
 const fetchToken = async () => {
   const res = await fetch("/token");
   if (!res.ok) throw new Error("Failed to fetch token");
@@ -115,6 +162,11 @@ const attachCallEvents = (call) => {
     const sid = getCallSid(call);
     logEvent("call.warning-cleared", { callSid: sid || "unknown", manualHangup, warning: name });
   });
+  call.on("audio", (audioEl) => {
+    const sid = getCallSid(call);
+    logEvent("call.audio", { callSid: sid || "unknown", sameElement: audioEl === activeRemoteAudio });
+    mountRemoteAudioElement(audioEl);
+  });
 };
 
 btnInit.addEventListener("click", async () => {
@@ -140,6 +192,8 @@ btnInit.addEventListener("click", async () => {
       attachCallEvents(call);
       call.accept();
     });
+
+    log("Speaker device selection: browser default");
 
     await device.register();
     log("Device registered");

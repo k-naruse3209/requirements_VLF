@@ -266,6 +266,7 @@ wss.on("connection", (ws: WebSocket) => {
   let commitTimer: NodeJS.Timeout | null = null;
   let queuedPrompt: string | null = null;
   let conversationStarted = false;
+  let twilioOutboundAudioChunks = 0;
   let stopReceived = false;
   let callLogId: string | null = null;
   let callLogEnded = false;
@@ -528,13 +529,32 @@ wss.on("connection", (ws: WebSocket) => {
 
   const sendToTwilio = (audioBase64: string) => {
     if (!streamSid) return;
-    ws.send(
-      JSON.stringify({
-        event: "media",
-        streamSid,
-        media: { payload: audioBase64, track: "outbound" },
-      })
-    );
+    const raw = Buffer.from(audioBase64, "base64");
+    if (raw.length === 0) return;
+    // Twilio Media Streams uses 8kHz G.711 μ-law. 20ms = 160 bytes.
+    // Split larger model chunks into telephony-sized frames for stable playback.
+    const frameBytes = 160;
+    for (let offset = 0; offset < raw.length; offset += frameBytes) {
+      const end = Math.min(offset + frameBytes, raw.length);
+      const frame =
+        end - offset === frameBytes
+          ? raw.subarray(offset, end)
+          : Buffer.concat([raw.subarray(offset, end), Buffer.alloc(frameBytes - (end - offset), 0xff)]);
+      twilioOutboundAudioChunks += 1;
+      if (twilioOutboundAudioChunks <= 3 || twilioOutboundAudioChunks % 50 === 0) {
+        console.log(`${logPrefix(wsId)} twilio.outbound.audio`, {
+          chunks: twilioOutboundAudioChunks,
+          bytes: frame.length,
+        });
+      }
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid,
+          media: { payload: frame.toString("base64") },
+        })
+      );
+    }
   };
 
   if (!config.openaiApiKey) {

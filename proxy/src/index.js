@@ -21,6 +21,7 @@ const isVoipPath = (url) => {
 
 const server = http.createServer((req, res) => {
   if (!req.url) return res.end();
+  console.log(`[proxy] http ${req.method} ${req.url}`);
   if (isVoipPath(req.url)) {
     return proxy.web(req, res, { target: voipTarget });
   }
@@ -29,7 +30,9 @@ const server = http.createServer((req, res) => {
 });
 
 server.on("upgrade", (req, socket, head) => {
+  console.log(`[proxy] upgrade ${req.url || ""}`);
   if (req.url && req.url.startsWith("/stream")) {
+    console.log(`[proxy] upgrade -> ws target ${wsTarget}`);
     return proxy.ws(req, socket, head, { target: wsTarget });
   }
   socket.destroy();
